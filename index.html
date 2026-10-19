@@ -21,6 +21,7 @@
         left: 50%;
         top: 50%;
         transform: translate(-50%, -50%);
+        image-rendering: pixelated;
       }
       .hud {
         position: fixed;
@@ -75,8 +76,8 @@
     <canvas id="game"></canvas>
     <div class="hud" id="info"></div>
     <div class="hud" id="help">
-      WASD move · ←/→ or Q/E turn · mouse look · Shift run · T fast time · M map
-      · H hide HUD · F fps
+      WASD move · ←/→ or Q/E turn · mouse look (all the way up/down) · Shift run
+      · T fast time · [ ] detail · M map · H hide HUD · F fps
     </div>
     <canvas class="hud" id="mini" width="164" height="164"></canvas>
 
@@ -88,9 +89,10 @@
 ╔══════════════════════════╗
 ║  W A S D   walk / strafe ║
 ║  ← →  or  Q E   turn     ║
-║  mouse     look around   ║
+║  mouse     look (up/down)║
 ║  Shift     run           ║
 ║  T (hold)  speed up time ║
+║  [ and ]   detail level  ║
 ║  M map   H HUD   F fps   ║
 ║  Esc       pause         ║
 ╚══════════════════════════╝
@@ -165,18 +167,21 @@
         return Math.atan2(Math.sin(d), Math.cos(d));
       }
 
-      // Colour -> CSS string, cached (and rounded a little) so we don't build thousands of strings per frame.
-      const rgbCache = new Array(262144);
+      // Colours are packed into one 32-bit number (little-endian ABGR) so a whole frame can be
+      // written straight into an ImageData buffer.
+      // rgb()  = rounded to steps of 4 (the sky uses this, exactly as before).
+      // rgbf() = full precision (ground, mountains, trees: smooth fog and shading without banding).
       function rgb(r, g, b) {
         r = r < 0 ? 0 : r > 255 ? 255 : r | 0;
         g = g < 0 ? 0 : g > 255 ? 255 : g | 0;
         b = b < 0 ? 0 : b > 255 ? 255 : b | 0;
-        const k = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
-        let s = rgbCache[k];
-        if (s === undefined)
-          s = rgbCache[k] =
-            "rgb(" + (r & 252) + "," + (g & 252) + "," + (b & 252) + ")";
-        return s;
+        return (0xff000000 | ((b & 252) << 16) | ((g & 252) << 8) | (r & 252)) >>> 0;
+      }
+      function rgbf(r, g, b) {
+        r = r < 0 ? 0 : r > 255 ? 255 : r | 0;
+        g = g < 0 ? 0 : g > 255 ? 255 : g | 0;
+        b = b < 0 ? 0 : b > 255 ? 255 : b | 0;
+        return (0xff000000 | (b << 16) | (g << 8) | r) >>> 0;
       }
 
       /* ---------- 2) WORLD GENERATOR ---------- */
@@ -187,13 +192,37 @@
         SAND = 2,
         MOUNT = 3,
         TREE = 4,
-        STONE = 5;
+        STONE = 5,
+        BUSH = 6;
       const tile = new Uint8Array(MW * MH); // what is on each tile
-      const hgt = new Float32Array(MW * MH); // how tall (mountains, trees, ruins)
-      const vari = new Uint8Array(MW * MH); // tree type / small variations
+      const hgt = new Float32Array(MW * MH); // how tall (mountains, trees, bushes, ruins)
+      const vari = new Uint8Array(MW * MH); // tree / bush type
       const SEED = 7;
       const SPAWN_X = MW / 2,
         SPAWN_Y = MH / 2;
+
+      // Mountains are smooth: every tile corner stores a height and the ground between corners is blended.
+      const W1 = MW + 1;
+      const cornerH = new Float32Array(W1 * (MH + 1));
+
+      // Trees and bushes are built from simple 3D shapes (cones, cylinders, ellipsoids).
+      // Each shape is 11 numbers in PP: kind, cx, cy, p1, p2, p3, p4, material, aux, zmin, zmax
+      //   kind 0 = cone / cylinder:  p1 = bottom z, p2 = top z, p3 = bottom radius, p4 = top radius
+      //   kind 1 = ellipsoid:        p1 = centre z, p2 = vertical radius, p3 = horizontal radius
+      const PSTRIDE = 11;
+      const partOff = new Int32Array(MW * MH).fill(-1);
+      const partCnt = new Uint8Array(MW * MH);
+      let PP = new Float32Array(0);
+      const partList = [];
+      let curN = 0,
+        curTop = 0;
+      function addPart(kind, cx, cy, p1, p2, p3, p4, mat, aux) {
+        const zmn = kind === 0 ? p1 : Math.max(0, p1 - p2);
+        const zmx = kind === 0 ? p2 : p1 + p2;
+        partList.push(kind, cx, cy, p1, p2, p3, p4, mat, aux, zmn, zmx);
+        curN++;
+        if (zmx > curTop) curTop = zmx;
+      }
 
       function genWorld() {
         for (let y = 0; y < MH; y++)
@@ -211,11 +240,44 @@
             else if (e < 0.405) tile[i] = SAND;
             else if (e > 0.7) {
               tile[i] = MOUNT;
-              hgt[i] = 1.3 + (e - 0.7) * 13 + hash(x, y, 4) * 0.5;
-              if (hgt[i] > 8) hgt[i] = 8;
+              const q = (e - 0.7) / 0.3;
+              hgt[i] = Math.min(
+                13.5,
+                1.4 + Math.pow(q, 1.15) * 7.2 + hash(x, y, 4) * 0.6,
+              );
             } else tile[i] = GRASS;
           }
-        // trees: sparse everywhere, thick in "forest" patches
+
+        // Mountains need to be at least 2 tiles wide to be drawn smoothly, so thin 1-tile slivers become grass.
+        {
+          const snap = tile.slice();
+          const isM = (x, y) =>
+            x < 0 || y < 0 || x >= MW || y >= MH ? true : snap[y * MW + x] === MOUNT;
+          for (let y = 0; y < MH; y++)
+            for (let x = 0; x < MW; x++) {
+              const i = y * MW + x;
+              if (snap[i] !== MOUNT) continue;
+              let keep = false;
+              for (let oy = -1; oy <= 0 && !keep; oy++)
+                for (let ox = -1; ox <= 0; ox++) {
+                  if (
+                    isM(x + ox, y + oy) &&
+                    isM(x + ox + 1, y + oy) &&
+                    isM(x + ox, y + oy + 1) &&
+                    isM(x + ox + 1, y + oy + 1)
+                  ) {
+                    keep = true;
+                    break;
+                  }
+                }
+              if (!keep) {
+                tile[i] = GRASS;
+                hgt[i] = 0;
+              }
+            }
+        }
+
+        // trees: sparse everywhere, thick in "forest" patches. Bushes: scattered, more around forests.
         for (let y = 0; y < MH; y++)
           for (let x = 0; x < MW; x++) {
             const i = y * MW + x;
@@ -227,9 +289,18 @@
               tile[i] = TREE;
               const v = hash(x, y, 6);
               vari[i] = v < 0.5 ? 0 : v < 0.92 ? 1 : 2; // pine / oak / autumn
-              hgt[i] = 1.9 + hash(x, y, 8) * 1.5;
+            } else {
+              const fb = fbm(x * 0.1, y * 0.1, 41, 2);
+              const pb =
+                0.02 + 0.17 * smoothstep(0.5, 0.68, fb) + 0.08 * smoothstep(0.42, 0.6, f);
+              if (hash(x, y, 43) < pb) {
+                tile[i] = BUSH;
+                const v = hash(x, y, 44);
+                vari[i] = v < 0.6 ? 0 : v < 0.85 ? 1 : 2; // green / dark / flowering
+              }
             }
           }
+
         // stone ruins: 5x5 rings of broken wall with a doorway
         let placed = 0;
         for (let n = 0; n < 400 && placed < 8; n++) {
@@ -278,6 +349,120 @@
               hgt[k] = 0;
             }
           }
+
+        buildCorners();
+        buildParts();
+      }
+
+      // Height of every tile corner = the lowest of the 4 tiles touching it (non-mountain tiles count as 0).
+      // That makes mountains start at ground level at their edges and rise smoothly inwards.
+      function buildCorners() {
+        for (let j = 0; j <= MH; j++)
+          for (let i = 0; i <= MW; i++) {
+            let m = 1e9;
+            for (let dj = -1; dj <= 0; dj++)
+              for (let di = -1; di <= 0; di++) {
+                const tx = i + di,
+                  ty = j + dj;
+                let h;
+                if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) h = 14;
+                else {
+                  const k = ty * MW + tx;
+                  h = tile[k] === MOUNT ? hgt[k] : 0;
+                }
+                if (h < m) m = h;
+              }
+            cornerH[j * W1 + i] = m;
+          }
+      }
+
+      // Build the 3D shapes for each tree and bush.
+      // Every shape stays inside its own tile (max 0.5 from the tile centre) so the ray marcher never misses it.
+      function buildParts() {
+        for (let y = 0; y < MH; y++)
+          for (let x = 0; x < MW; x++) {
+            const i = y * MW + x,
+              tp = tile[i];
+            if (tp !== TREE && tp !== BUSH) continue;
+            const cx0 = x + 0.5 + (hash(x, y, 100) - 0.5) * 0.14,
+              cy0 = y + 0.5 + (hash(x, y, 101) - 0.5) * 0.14;
+            partOff[i] = partList.length;
+            curN = 0;
+            curTop = 0;
+            const type = vari[i];
+            if (tp === TREE) {
+              const r1 = hash(x, y, 102),
+                r2 = hash(x, y, 103),
+                r3 = hash(x, y, 104);
+              if (type === 0) {
+                // pine: slim trunk + stacked skirts of needles
+                const H = 3.2 + r1 * 1.6;
+                addPart(0, cx0, cy0, 0, H * 0.9, 0.12, 0.05, 0, 0);
+                const nT = 5 + ((r2 * 3) | 0);
+                const zS = 0.85,
+                  step = (H - zS) / (nT + 0.9);
+                const Rmax = 0.3 + 0.07 * r3;
+                for (let k = 0; k < nT; k++) {
+                  const fr = k / (nT - 1);
+                  const zb = zS + k * step,
+                    zt = Math.min(H, zb + step * 2.25);
+                  const Rb = Rmax * (1 - 0.84 * Math.pow(fr, 0.9));
+                  addPart(0, cx0, cy0, zb, zt, Rb, 0.015, 1, fr);
+                }
+              } else {
+                // oak / autumn tree: thick trunk + a lumpy round crown
+                const H = 2.7 + r1 * 0.9;
+                const mat = type === 2 ? 3 : 2;
+                addPart(0, cx0, cy0, 0, H * 0.66, 0.115, 0.07, 0, 0);
+                const a0 = 0.32 + 0.07 * r2;
+                addPart(1, cx0, cy0, H * 0.7, H * 0.26, a0, 0, mat, 0.5);
+                for (let k = 0; k < 3; k++) {
+                  const ang = hash(x, y, 110 + k) * 6.283 + k * 2.1;
+                  const off = 0.1 + 0.06 * hash(x, y, 113 + k);
+                  let la = 0.2 + 0.06 * hash(x, y, 116 + k);
+                  if (off + la > 0.4) la = 0.4 - off;
+                  const lz = H * 0.7 + (hash(x, y, 119 + k) - 0.5) * H * 0.3;
+                  const lb = la * (1.15 + 0.4 * hash(x, y, 122 + k));
+                  addPart(
+                    1,
+                    cx0 + Math.cos(ang) * off,
+                    cy0 + Math.sin(ang) * off,
+                    lz,
+                    lb,
+                    la,
+                    0,
+                    mat,
+                    clamp(0.5 + (lz - H * 0.7) / H, 0, 1),
+                  );
+                }
+              }
+            } else {
+              // bush: 2-4 overlapping green lumps
+              const mat = type === 0 ? 4 : type === 1 ? 5 : 6;
+              const nL = 2 + ((hash(x, y, 130) * 3) | 0);
+              for (let k = 0; k < nL; k++) {
+                const ang = hash(x, y, 131 + k) * 6.283;
+                const off = k === 0 ? 0.03 * hash(x, y, 135) : 0.07 + 0.08 * hash(x, y, 136 + k);
+                let a = 0.17 + 0.1 * hash(x, y, 140 + k);
+                if (off + a > 0.4) a = 0.4 - off;
+                const b = 0.2 + 0.2 * hash(x, y, 144 + k);
+                addPart(
+                  1,
+                  cx0 + Math.cos(ang) * off,
+                  cy0 + Math.sin(ang) * off,
+                  b * 0.6,
+                  b,
+                  a,
+                  0,
+                  mat,
+                  0.5,
+                );
+              }
+            }
+            partCnt[i] = curN;
+            hgt[i] = curTop;
+          }
+        PP = Float32Array.from(partList);
       }
       genWorld();
 
@@ -286,11 +471,36 @@
         return tile[y * MW + x];
       }
 
+      // Smooth mountain surface height at a world position (0 everywhere that is not mountain).
+      function baseH(x, y) {
+        if (x < 0) x = 0;
+        else if (x > MW - 0.0001) x = MW - 0.0001;
+        if (y < 0) y = 0;
+        else if (y > MH - 0.0001) y = MH - 0.0001;
+        const ix = x | 0,
+          iy = y | 0,
+          fx = x - ix,
+          fy = y - iy;
+        const k = iy * W1 + ix;
+        const a = cornerH[k],
+          b = cornerH[k + 1],
+          c = cornerH[k + W1],
+          d = cornerH[k + W1 + 1];
+        return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+      }
+      // Rocky bumps and ridges: multiplies the smooth height by 0.72 .. 1.28 (so zero stays zero).
+      function mtnDetail(x, y) {
+        return (
+          0.72 + 0.56 * (0.65 * vnoise(x * 0.9, y * 0.9, 11) + 0.35 * vnoise(x * 2.3, y * 2.3, 12))
+        );
+      }
+
       /* ---------- 3) PLAYER & COLLISION ---------- */
       let px = SPAWN_X + 0.5,
         py = SPAWN_Y + 0.5; // position in tiles
       let angle = 0.35; // 0 = east (+x), clockwise as it grows
-      let lookUp = 0; // vertical look, in text rows
+      let pitch = 0; // vertical look in radians: + is up, - is down (up to almost straight up / down)
+      const PITCH_MAX = 1.553; // about 89 degrees
       let bobT = 0,
         bob = 0,
         moving = 0;
@@ -311,12 +521,11 @@
               const dx = x - nx,
                 dy = y - ny;
               if (dx * dx + dy * dy < PR * PR) return true;
-            } else if (t === TREE) {
-              // trees only block their trunk
+            } else if (t === TREE || t === BUSH) {
+              // trees and bushes block a round area around their middle
               const dx = x - (i + 0.5),
-                dy = y - (j + 0.5),
-                r = PR + 0.13;
-              if (dx * dx + dy * dy < r * r) return true;
+                dy = y - (j + 0.5);
+              if (dx * dx + dy * dy < 0.2025) return true;
             }
           }
         return false;
@@ -325,38 +534,86 @@
       /* ---------- 4) RENDERER ---------- */
       const cv = document.getElementById("game");
       const ctx = cv.getContext("2d");
-      let cols, rows, cellW, cellH, dpr, K, P, pxPerUnit;
+      let cols, rows, cellW, cellH, K, P, pxPerUnit;
       let ch, fgA, bgA, filled, rowDist, skyBg;
+      let img, buf32;
+      let starBX = 1,
+        starBY = 1,
+        starP = 0.005;
       const FOV = 76;
       P = Math.tan((FOV * Math.PI) / 360); // half-width of the "camera plane"
 
+      // Detail levels (text rows on screen). [ and ] change it while playing.
+      const QUALITY = [56, 72, 90, 112, 140];
+      let qIdx = 2;
+
       function resize() {
-        dpr = Math.min(2, Math.round(window.devicePixelRatio) || 1);
-        cellH = Math.max(12, Math.floor(innerHeight / 46));
-        cellW = Math.round(cellH * 0.56);
-        while (innerWidth / cellW > 140) {
-          cellH++;
-          cellW = Math.round(cellH * 0.56);
-        } // keep it fast on huge screens
-        cols = Math.max(40, Math.floor(innerWidth / cellW));
-        rows = Math.max(20, Math.floor(innerHeight / cellH));
-        cv.width = cols * cellW * dpr;
-        cv.height = rows * cellH * dpr;
-        cv.style.width = cols * cellW + "px";
-        cv.style.height = rows * cellH + "px";
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.font = Math.round(cellH * 0.9) + "px " + FONT;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        // very large screens are drawn at half size and stretched, so it stays fast
+        const sc = Math.max(1, Math.ceil(Math.max(innerWidth / 2000, innerHeight / 1100)));
+        const vw = Math.floor(innerWidth / sc),
+          vh = Math.floor(innerHeight / sc);
+        cellH = Math.max(5, Math.round(vh / QUALITY[qIdx]));
+        cellW = Math.max(3, Math.round(cellH * 0.56));
+        cols = Math.max(40, Math.floor(vw / cellW));
+        rows = Math.max(20, Math.floor(vh / cellH));
+        cv.width = cols * cellW;
+        cv.height = rows * cellH;
+        cv.style.width = cols * cellW * sc + "px";
+        cv.style.height = rows * cellH * sc + "px";
+        img = ctx.createImageData(cv.width, cv.height);
+        buf32 = new Uint32Array(img.data.buffer);
+        glyphCache.clear();
         const N = cols * rows;
         ch = new Array(N).fill(" ");
-        fgA = new Array(N).fill("#000");
-        bgA = new Array(N).fill("#000");
+        fgA = new Uint32Array(N);
+        bgA = new Uint32Array(N);
         filled = new Uint8Array(rows);
         rowDist = new Float32Array(rows);
-        skyBg = new Array(rows).fill("#000");
+        skyBg = new Uint32Array(rows);
         pxPerUnit = (cols * cellW) / 2 / P;
         K = pxPerUnit / cellH; // text rows per world unit at distance 1
+        // star bins are one text cell big; the chance keeps the same number of stars on screen as before
+        starBX = pxPerUnit / cellW;
+        starBY = K;
+        starP = clamp((117.6 * cellW * cellH) / (pxPerUnit * pxPerUnit), 0.0004, 0.05);
+      }
+
+      // ----- glyph masks: each text character as a small pixel pattern, built once -----
+      const glyphCache = new Map();
+      let gcv = null,
+        gctx = null;
+      function glyphMask(chr) {
+        let m = glyphCache.get(chr);
+        if (m) return m;
+        m = new Uint8Array(cellW * cellH);
+        if (chr === "░" || chr === "▒" || chr === "▓") {
+          // shading blocks drawn as exact pixel patterns, so they tile with no gaps
+          for (let y = 0; y < cellH; y++)
+            for (let x = 0; x < cellW; x++) {
+              const q = (x + y) & 3;
+              let on;
+              if (chr === "░") on = q === 0;
+              else if (chr === "▒") on = (q & 1) === 0;
+              else on = q !== 0;
+              m[y * cellW + x] = on ? 255 : 0;
+            }
+        } else {
+          if (!gcv) {
+            gcv = document.createElement("canvas");
+            gctx = gcv.getContext("2d", { willReadFrequently: true });
+          }
+          gcv.width = cellW; // (this also clears it)
+          gcv.height = cellH;
+          gctx.font = Math.max(5, Math.round(cellH * 0.9)) + "px " + FONT;
+          gctx.textAlign = "center";
+          gctx.textBaseline = "middle";
+          gctx.fillStyle = "#fff";
+          gctx.fillText(chr, cellW / 2, cellH / 2 + 0.5);
+          const d = gctx.getImageData(0, 0, cellW, cellH).data;
+          for (let k = 0; k < cellW * cellH; k++) m[k] = d[k * 4 + 3];
+        }
+        glyphCache.set(chr, m);
+        return m;
       }
 
       // ----- time of day -----
@@ -376,7 +633,10 @@
         FR = 0,
         FG = 0,
         FB = 0,
-        fogK = 0.028;
+        fogK = 0.0085; // thin haze: far mountains fade gently into the sky colour
+      let LX = 0,
+        LY = 0,
+        LZ = 1; // direction towards the sun (or moon at night)
       let horizon = 0;
       const sunS = { x: 0, y: 0, vis: false },
         moonS = { x: 0, y: 0, vis: false };
@@ -434,183 +694,452 @@
         const f = 1 - Math.exp(-d * fogK),
           g = 1 - f;
         ch[i] = chr;
-        fgA[i] = rgb(
+        fgA[i] = rgbf(
           fr * LR * g + FR * f,
           fg * LG * g + FG * f,
           fb * LB * g + FB * f,
         );
-        bgA[i] = rgb(
+        bgA[i] = rgbf(
           br * LR * g + FR * f,
           bg * LG * g + FG * f,
           bb * LB * g + FB * f,
         );
       }
 
-      const GRASS_CH = ['"', ",", "'", "·", "⠂", "`", "’"];
-      const SAND_CH = ["·", "∙", ".", ":", "⠂"];
-      const CANOPY = [
-        [24, 100, 58],
-        [52, 138, 44],
-        [196, 122, 34],
-      ]; // pine, oak, autumn
+      const MAXD = 230; // how far (in tiles) the renderer looks
+      const ZMAX = 17; // tallest thing in the world (used to stop the ray early)
+      let nFilled = 0,
+        occTop = 0,
+        tStop = 1e9;
 
-      // Draw one vertical strip of a wall/tree part. zb..zt = bottom..top height in world units.
-      let nFilled = 0;
-      function drawSeg(c, t, zb, zt, kind, side, u, tx, ty, v) {
+      // Called after a strip that covers every row from r0 down to the ground: anything further away
+      // can only show above row r0, so once nothing can be that tall any more the ray can stop.
+      function markOpaque(r0) {
+        if (r0 < occTop) {
+          occTop = r0;
+          const hd = horizon - r0;
+          if (hd > 1e-6) {
+            const ts = ((ZMAX - eyeH) * K) / hd;
+            if (ts < tStop) tStop = ts;
+          }
+        }
+      }
+
+      // ----- mountains: one vertical strip of smooth terrain at depth t, top height S, slope (gx,gy) -----
+      function terrainStrip(c, t, wx, wy, S, gx, gy) {
         if (t < 0.02) t = 0.02;
-        const yt = horizon - ((zt - eyeH) * K) / t;
-        const yb = horizon + ((eyeH - zb) * K) / t;
+        const yt = horizon - ((S - eyeH) * K) / t;
+        let r0 = Math.ceil(yt - 0.5);
+        if (r0 < 0) r0 = 0;
+        if (r0 >= occTop) return;
+        const yb = horizon + (eyeH * K) / t;
+        let r1 = Math.ceil(yb - 0.5);
+        if (r1 > rows) r1 = rows;
+        if (r0 >= r1) return;
+        const sl = Math.sqrt(gx * gx + gy * gy);
+        let nl = (LZ - gx * LX - gy * LY) / Math.sqrt(1 + sl * sl);
+        if (nl < 0) nl = 0;
+        const sh = 0.36 + 0.8 * nl; // sunlit slopes bright, slopes facing away dark
+        const far = t > 70;
+        for (let r = r0; r < r1; r++) {
+          if (filled[r]) continue;
+          filled[r] = 1;
+          nFilled++;
+          let z = eyeH - ((r + 0.5 - horizon) * t) / K; // height of this row on the mountain
+          if (z < 0) z = 0;
+          const i = r * cols + c;
+          const zq = (z * 4) | 0;
+          const nA = vnoise(wx * 0.6 + z * 0.2, wy * 0.6 + z * 0.5, 14);
+          const nB = hash(((wx * 6) | 0) + zq * 131, ((wy * 6) | 0) + zq * 7, 15);
+          // rock: brown to grey, with layers and cracks
+          let R = 108 + 38 * nA,
+            G = 94 + 44 * nA,
+            B = 82 + 62 * nA;
+          const str = 0.9 + 0.1 * Math.sin(z * 3.3 + nA * 7);
+          R *= str;
+          G *= str;
+          B *= str;
+          if (nB < 0.1) {
+            R *= 0.74;
+            G *= 0.74;
+            B *= 0.78;
+          }
+          // forest at the foot of the mountain
+          const treeLine = 2.0 + nA * 1.4;
+          const fo = 1 - smoothstep(treeLine - 0.5, treeLine, z);
+          if (fo > 0) {
+            R = lerp(R, 38 + nB * 22, fo);
+            G = lerp(G, 82 + nB * 34, fo);
+            B = lerp(B, 36 + nB * 14, fo);
+          }
+          // snow: high up, and not on very steep rock
+          const snowLine = 4.2 + nA * 1.4;
+          const sa =
+            smoothstep(snowLine - 0.4, snowLine + 0.5, z + (nB - 0.5) * 0.35) *
+            (1 - smoothstep(2.4, 4.6, sl));
+          if (sa > 0) {
+            R = lerp(R, 240, sa);
+            G = lerp(G, 244, sa);
+            B = lerp(B, 252, sa);
+          }
+          R *= sh;
+          G *= sh;
+          B = B * sh + (sh < 1 ? (1 - sh) * 26 : 0); // shadows lean a little blue
+          let chr, bk;
+          if (far) {
+            chr = "█";
+            bk = 1;
+          } else {
+            chr = nB < 0.2 ? "░" : nB < 0.46 ? "▒" : nB < 0.8 ? "▓" : "█";
+            bk = sa > 0.5 ? 0.86 : 0.68;
+          }
+          put(i, chr, R, G, B, R * bk, G * bk, B * bk, t);
+        }
+        markOpaque(r0);
+      }
+
+      // A ray crossing one mountain tile: sample the smooth surface a few times along the way.
+      function mountainTile(c, tIn, tOut, rdx, rdy) {
+        const dt = tOut - tIn;
+        let n = Math.ceil(dt / (0.07 + 0.012 * tIn));
+        if (n < 1) n = 1;
+        else if (n > 12) n = 12;
+        for (let k = 1; k <= n; k++) {
+          if (occTop <= 0) return;
+          const t = tIn + (dt * k) / n;
+          const wx = px + rdx * t,
+            wy = py + rdy * t;
+          const b0 = baseH(wx, wy);
+          if (b0 < 0.003) continue;
+          let S = b0 * mtnDetail(wx, wy);
+          if (S > 16) S = 16;
+          const yt = horizon - ((S - eyeH) * K) / t;
+          if (Math.ceil(yt - 0.5) >= occTop) continue; // completely hidden behind something nearer
+          const e = 0.45;
+          const gx = (baseH(wx + e, wy) - baseH(wx - e, wy)) / (2 * e);
+          const gy = (baseH(wx, wy + e) - baseH(wx, wy - e)) / (2 * e);
+          terrainStrip(c, t, wx, wy, S, gx, gy);
+        }
+      }
+
+      // ----- ruins: stone wall strips -----
+      function stoneStrip(c, t, h, side, u, tx, ty) {
+        if (t < 0.02) t = 0.02;
+        const yt = horizon - ((h - eyeH) * K) / t;
+        const yb = horizon + (eyeH * K) / t;
         const r0 = Math.max(0, Math.ceil(yt - 0.5)),
           r1 = Math.min(rows, Math.ceil(yb - 0.5));
+        if (r0 >= r1 || r0 >= occTop) return;
         const sm = side ? 0.72 : 1;
         for (let r = r0; r < r1; r++) {
           if (filled[r]) continue;
           filled[r] = 1;
           nFilled++;
-          const z = eyeH - ((r + 0.5 - horizon) * t) / K; // height of this row on the wall
+          let z = eyeH - ((r + 0.5 - horizon) * t) / K;
+          if (z < 0) z = 0;
           const i = r * cols + c;
-          let chr, R, G, B;
-          if (kind === MOUNT) {
-            const hh = hash(
-              tx * 7 + ((u * 5) | 0),
-              ((z * 4) | 0) + ty * 131,
-              3,
-            );
-            if (z < 1.4 + hh * 0.4) {
-              R = 46;
-              G = 84;
-              B = 42;
-            } // grassy foot
-            else if (z < 3.4 + hh) {
-              R = 116;
-              G = 100;
-              B = 88;
-            } // brown rock
-            else if (z < 4.9 + hh * 0.8) {
-              R = 152;
-              G = 150;
-              B = 152;
-            } // grey rock
-            else {
-              R = 240;
-              G = 244;
-              B = 252;
-            } // snow
-            chr = hh < 0.3 ? "░" : hh < 0.55 ? "▒" : hh < 0.85 ? "▓" : "█";
-            put(
-              i,
-              chr,
-              R * sm,
-              G * sm,
-              B * sm,
-              R * sm * 0.6,
-              G * sm * 0.6,
-              B * sm * 0.62,
-              t,
-            );
-          } else if (kind === STONE) {
-            const row = Math.floor(z * 2.5);
-            const hh = hash(tx * 3 + row, ty * 5 + ((u * 3) | 0), 12);
-            if (z * 2.5 - row < 0.22) chr = "═";
-            else if ((u * 3 + 0.5 * (row & 1)) % 1 < 0.14) chr = "║";
-            else chr = hh < 0.5 ? "▓" : "▒";
-            R = 156;
-            G = 150;
-            B = 142;
-            if (z < 0.7 && hh > 0.5) {
-              R = 110;
-              G = 140;
-              B = 90;
-            } // moss
-            put(
-              i,
-              chr,
-              R * sm,
-              G * sm,
-              B * sm,
-              R * sm * 0.42,
-              G * sm * 0.42,
-              B * sm * 0.42,
-              t,
-            );
-          } else if (kind === 10) {
-            // tree trunk
-            put(
-              i,
-              "║",
-              120 * sm,
-              80 * sm,
-              42 * sm,
-              52 * sm,
-              34 * sm,
-              18 * sm,
-              t,
-            );
+          const row = Math.floor(z * 2.5);
+          const hh = hash(tx * 3 + row, ty * 5 + ((u * 3) | 0), 12);
+          const mortar = z * 2.5 - row < 0.14 || (u * 3 + 0.5 * (row & 1)) % 1 < 0.09;
+          let R = 156 * (0.88 + 0.2 * hh),
+            G = 150 * (0.88 + 0.2 * hh),
+            B = 142 * (0.88 + 0.2 * hh);
+          if (z < 0.7 && hh > 0.5) {
+            R = 110;
+            G = 140;
+            B = 90;
+          } // moss
+          let chr;
+          if (mortar) {
+            R *= 0.55;
+            G *= 0.55;
+            B *= 0.55;
+            chr = "█";
+          } else chr = hh < 0.5 ? "▓" : "▒";
+          put(i, chr, R * sm, G * sm, B * sm, R * sm * 0.45, G * sm * 0.45, B * sm * 0.45, t);
+        }
+        markOpaque(r0);
+      }
+
+      // ----- trees and bushes: ray against 3D shapes, one text cell at a time -----
+      const hT = new Float64Array(12),
+        hNX = new Float64Array(12),
+        hNY = new Float64Array(12),
+        hNZ = new Float64Array(12);
+
+      // Distance along the ray (in the same units as the wall distance) to the first hit on shape b, or -1.
+      // The ray for one text row is: horizontal point = (px,py) + (rdx,rdy)*t, height = eyeH + s*t.
+      function hitPart(b, j, rdx, rdy, s, A) {
+        const ox = px - PP[b + 1],
+          oy = py - PP[b + 2];
+        const Bq = 2 * (ox * rdx + oy * rdy),
+          Cq = ox * ox + oy * oy;
+        if (PP[b] === 1) {
+          // ellipsoid
+          const zc = PP[b + 3],
+            bb = PP[b + 4],
+            a = PP[b + 5];
+          const ia = 1 / (a * a),
+            ib = 1 / (bb * bb),
+            e0 = eyeH - zc;
+          const qa = A * ia + s * s * ib;
+          const qb = Bq * ia + 2 * e0 * s * ib;
+          const qc = Cq * ia + e0 * e0 * ib - 1;
+          const disc = qb * qb - 4 * qa * qc;
+          if (disc <= 0) return -1;
+          const t = (-qb - Math.sqrt(disc)) / (2 * qa);
+          if (t <= 0.02) return -1;
+          const z = eyeH + s * t;
+          if (z < 0) return -1; // that part is under the ground
+          const nx = (ox + rdx * t) * ia,
+            ny = (oy + rdy * t) * ia,
+            nz = (z - zc) * ib;
+          const il = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+          hNX[j] = nx * il;
+          hNY[j] = ny * il;
+          hNZ[j] = nz * il;
+          return t;
+        }
+        // cone / cylinder
+        const z0 = PP[b + 3],
+          z1 = PP[b + 4],
+          R0 = PP[b + 5],
+          R1 = PP[b + 6];
+        const k = (R1 - R0) / (z1 - z0);
+        const m = R0 + k * (eyeH - z0),
+          n = k * s; // radius at distance t is m + n*t
+        const al = A - n * n,
+          be = Bq - 2 * m * n,
+          ga = Cq - m * m;
+        let best = 1e30,
+          kindHit = 0;
+        if (al > 1e-9 || al < -1e-9) {
+          const disc = be * be - 4 * al * ga;
+          if (disc >= 0) {
+            const sq = Math.sqrt(disc),
+              ia2 = 1 / (2 * al);
+            let t1 = (-be - sq) * ia2,
+              t2 = (-be + sq) * ia2;
+            if (t1 > t2) {
+              const tmp = t1;
+              t1 = t2;
+              t2 = tmp;
+            }
+            if (t1 > 0.02) {
+              const z = eyeH + s * t1;
+              if (z >= z0 && z <= z1 && m + n * t1 >= 0) best = t1;
+            }
+            if (best === 1e30 && t2 > 0.02) {
+              const z = eyeH + s * t2;
+              if (z >= z0 && z <= z1 && m + n * t2 >= 0) best = t2;
+            }
+          }
+        } else if (be > 1e-12 || be < -1e-12) {
+          const t1 = -ga / be;
+          if (t1 > 0.02) {
+            const z = eyeH + s * t1;
+            if (z >= z0 && z <= z1 && m + n * t1 >= 0) best = t1;
+          }
+        }
+        if (s > 1e-9 || s < -1e-9) {
+          // flat bottom / top faces
+          let tc = (z0 - eyeH) / s;
+          if (tc > 0.02 && tc < best) {
+            const hx = ox + rdx * tc,
+              hy = oy + rdy * tc;
+            if (hx * hx + hy * hy <= R0 * R0) {
+              best = tc;
+              kindHit = 1;
+            }
+          }
+          tc = (z1 - eyeH) / s;
+          if (tc > 0.02 && tc < best) {
+            const hx = ox + rdx * tc,
+              hy = oy + rdy * tc;
+            if (hx * hx + hy * hy <= R1 * R1) {
+              best = tc;
+              kindHit = 2;
+            }
+          }
+        }
+        if (best === 1e30) return -1;
+        if (kindHit === 1) {
+          hNX[j] = 0;
+          hNY[j] = 0;
+          hNZ[j] = -1;
+        } else if (kindHit === 2) {
+          hNX[j] = 0;
+          hNY[j] = 0;
+          hNZ[j] = 1;
+        } else {
+          const hx = ox + rdx * best,
+            hy = oy + rdy * best;
+          const rr = Math.sqrt(hx * hx + hy * hy),
+            il = 1 / Math.sqrt(1 + k * k);
+          if (rr < 1e-6) {
+            hNX[j] = 0;
+            hNY[j] = 0;
+            hNZ[j] = 1;
           } else {
-            // tree leaves
-            const col = CANOPY[v],
-              hh = hash(tx * 5 + ((u * 6) | 0), ((z * 5) | 0) + ty * 71, 14);
-            chr = hh < 0.25 ? "░" : hh < 0.55 ? "▒" : hh < 0.9 ? "▓" : "█";
-            const m = (0.75 + hh * 0.4) * sm;
-            put(
-              i,
-              chr,
-              col[0] * m,
-              col[1] * m,
-              col[2] * m,
-              col[0] * 0.4 * sm,
-              col[1] * 0.4 * sm,
-              col[2] * 0.4 * sm,
-              t,
-            );
+            hNX[j] = (hx / rr) * il;
+            hNY[j] = (hy / rr) * il;
+            hNZ[j] = -k * il;
+          }
+        }
+        return best;
+      }
+
+      // leaf colours: [dark, light] per material (1 pine, 2 oak, 3 autumn, 4/5/6 bushes)
+      const LEAFD = [null, [18, 66, 42], [34, 94, 32], [160, 56, 22], [34, 96, 40], [24, 72, 40], [34, 96, 40]];
+      const LEAFL = [null, [58, 134, 74], [110, 176, 60], [240, 176, 54], [92, 168, 72], [62, 128, 68], [92, 168, 72]];
+
+      // Paint one text cell of a tree / bush shape. Returns false if the cell is a gap in the leaves.
+      function paintPart(i, b, j, t, rdx, rdy, s, A) {
+        const mat = PP[b + 7] | 0,
+          aux = PP[b + 8];
+        const wx = px + rdx * t,
+          wy = py + rdy * t,
+          z = eyeH + s * t;
+        const nx = hNX[j],
+          ny = hNY[j],
+          nz = hNZ[j];
+        let nl = nx * LX + ny * LY + nz * LZ;
+        if (nl < 0) nl = 0;
+        const hh = hash(((wx * 11) | 0) + ((z * 11) | 0) * 37, ((wy * 11) | 0) + ((z * 7) | 0) * 5, 22);
+        if (mat === 0) {
+          // bark: vertical streaks
+          const ang = Math.atan2(wy - PP[b + 2], wx - PP[b + 1]) + 3.1416;
+          const st = hash(Math.floor(ang * 5.5), (z * 0.8) | 0, 52);
+          const st2 = hash(Math.floor(ang * 14), 0, 53);
+          const sh = 0.42 + 0.66 * nl;
+          const R = (62 + 46 * st + 24 * st2) * sh,
+            G = (42 + 30 * st + 16 * st2) * sh,
+            B = (24 + 18 * st + 10 * st2) * sh;
+          put(i, st2 < 0.3 ? "▓" : "█", R, G, B, R * 0.7, G * 0.7, B * 0.7, t);
+          return true;
+        }
+        // leaves: ragged outline (gaps where we look along the surface)
+        const gz = Math.abs(nx * rdx + ny * rdy + nz * s) / Math.sqrt(A + s * s);
+        if (gz < 0.3 && hh < (0.3 - gz) * 2.4) return false;
+        const ellip = PP[b] === 1;
+        let v;
+        if (ellip) {
+          const zc = PP[b + 3],
+            bb = PP[b + 4];
+          v = (z - (zc - bb)) / (2 * bb);
+        } else {
+          v = (z - PP[b + 3]) / (PP[b + 4] - PP[b + 3]);
+          if (v < 0.1 && hh < (0.1 - v) * 8) return false; // jagged lower edge of a pine skirt
+        }
+        v = clamp(v, 0, 1);
+        const dk = LEAFD[mat],
+          lt = LEAFL[mat];
+        const lv = vnoise(wx * 7 + z * 3, wy * 7 + z * 5, 21);
+        const mix = clamp(0.18 + 0.62 * nl + (lv - 0.5) * 0.7 + (hh - 0.5) * 0.25, 0, 1);
+        const ao = ellip ? 0.6 + 0.4 * v : 0.6 + 0.4 * (0.65 * v + 0.35 * aux);
+        let R = lerp(dk[0], lt[0], mix) * ao,
+          G = lerp(dk[1], lt[1], mix) * ao,
+          B = lerp(dk[2], lt[2], mix) * ao;
+        let chr = hh < 0.16 ? "░" : hh < 0.4 ? "▒" : hh < 0.74 ? "▓" : "█";
+        if (mat === 6 && hh > 0.93) {
+          // flowers on the flowering bushes
+          const fl = hash(((wx * 11) | 0), ((wy * 11) | 0), 23);
+          if (fl < 0.4) {
+            R = 238;
+            G = 118;
+            B = 168;
+          } else if (fl < 0.7) {
+            R = 246;
+            G = 240;
+            B = 236;
+          } else {
+            R = 246;
+            G = 214;
+            B = 80;
+          }
+          R *= 0.7 + 0.3 * nl + 0.2;
+          G *= 0.7 + 0.3 * nl + 0.2;
+          B *= 0.7 + 0.3 * nl + 0.2;
+          chr = "▓";
+        }
+        put(i, chr, R, G, B, R * 0.6, G * 0.6, B * 0.6, t);
+        return true;
+      }
+
+      // A ray crossing a tree / bush tile.
+      function treeTile(c, idx, mapX, mapY, rdx, rdy) {
+        const off = partOff[idx],
+          cnt = partCnt[idx];
+        if (off < 0 || cnt === 0) return;
+        const A = rdx * rdx + rdy * rdy;
+        const ocx = px - (mapX + 0.5),
+          ocy = py - (mapY + 0.5);
+        const dd = ocx * rdx + ocy * rdy;
+        const d2 = ocx * ocx + ocy * ocy - (dd * dd) / A;
+        if (d2 >= 0.25) return; // the ray passes outside the tile's circle: it cannot touch the shapes
+        const hw = Math.sqrt((0.25 - d2) / A),
+          tc = -dd / A;
+        let tn = tc - hw;
+        const tf = tc + hw;
+        if (tf <= 0.02) return;
+        if (tn < 0.02) tn = 0.02;
+        const H = hgt[idx];
+        let rTop = Math.floor(horizon - ((H - eyeH) * K) / (H > eyeH ? tn : tf));
+        let rBot = Math.ceil(horizon + (eyeH * K) / tn);
+        if (rTop < 0) rTop = 0;
+        if (rBot > rows - 1) rBot = rows - 1;
+        if (rBot > occTop - 1) rBot = occTop - 1;
+        if (rTop > rBot) return;
+        for (let r = rTop; r <= rBot; r++) {
+          if (filled[r]) continue;
+          const s = -(r + 0.5 - horizon) / K;
+          const za = eyeH + s * tn,
+            zb = eyeH + s * tf;
+          const zlo = za < zb ? za : zb,
+            zhi = za < zb ? zb : za;
+          if (zhi < 0) continue;
+          let any = false;
+          for (let j = 0; j < cnt; j++) {
+            const b = off + j * PSTRIDE;
+            if (zhi < PP[b + 9] || zlo > PP[b + 10]) {
+              hT[j] = -1;
+              continue;
+            }
+            const tt = hitPart(b, j, rdx, rdy, s, A);
+            hT[j] = tt;
+            if (tt > 0) any = true;
+          }
+          if (!any) continue;
+          let excl = 0;
+          for (;;) {
+            let best = -1,
+              bt = 1e30;
+            for (let j = 0; j < cnt; j++)
+              if (((excl >> j) & 1) === 0 && hT[j] > 0 && hT[j] < bt) {
+                bt = hT[j];
+                best = j;
+              }
+            if (best < 0) break;
+            if (paintPart(r * cols + c, off + best * PSTRIDE, best, bt, rdx, rdy, s, A)) {
+              filled[r] = 1;
+              nFilled++;
+              break;
+            }
+            excl |= 1 << best; // a gap in the leaves: look through it at whatever is behind
           }
         }
       }
 
-      // Ray against a small square box in the middle of a tile (used for tree parts). Returns hit distance or -1.
-      let slabSide = 0,
-        slabU = 0;
-      function slab(rdx, rdy, cx, cy, hw) {
-        const dx = rdx || 1e-9,
-          dy = rdy || 1e-9;
-        let ax = (cx - hw - px) / dx,
-          bx = (cx + hw - px) / dx;
-        let ay = (cy - hw - py) / dy,
-          by = (cy + hw - py) / dy;
-        if (ax > bx) {
-          const t = ax;
-          ax = bx;
-          bx = t;
-        }
-        if (ay > by) {
-          const t = ay;
-          ay = by;
-          by = t;
-        }
-        const t0 = Math.max(ax, ay),
-          t1 = Math.min(bx, by);
-        if (t0 > t1 || t1 <= 0 || t0 <= 0.02) return -1;
-        if (ax > ay) {
-          slabSide = 0;
-          slabU = (py + rdy * t0 - (cy - hw)) / (2 * hw);
-        } else {
-          slabSide = 1;
-          slabU = (px + rdx * t0 - (cx - hw)) / (2 * hw);
-        }
-        return t0;
-      }
+      // Ray against a small slab is no longer needed: trees are real 3D shapes now.
 
-      const MAXD = 70;
-      const tT = [0, 0, 0],
-        tS = [0, 0, 0],
-        tU = [0, 0, 0];
+      const GRASS_SHADE_TREE = 0.58;
 
       function render() {
         const dirX = Math.cos(angle),
           dirY = Math.sin(angle);
         const plX = -dirY * P,
           plY = dirX * P; // camera plane (points to the right)
-        horizon = rows * 0.5 + lookUp + bob;
+        horizon = rows * 0.5 + K * Math.tan(pitch) + bob;
         updateSky();
         for (let r = 0; r < rows; r++) {
           const y = r + 0.5;
@@ -618,12 +1147,22 @@
         }
         celestial(sunAz, sunEl, sunS);
         celestial(moonAz, moonEl, moonS);
+        // light direction for shading mountains and trees
+        {
+          const up = sunEl > 0.0;
+          const laz = up ? sunAz : moonAz;
+          let lel = up ? sunEl : moonEl;
+          if (lel < 0.2) lel = 0.2;
+          const cl = Math.cos(lel);
+          LX = Math.cos(laz) * cl;
+          LY = Math.sin(laz) * cl;
+          LZ = Math.sin(lel);
+        }
         const sunR = 0.07 * pxPerUnit,
           moonR = 0.05 * pxPerUnit,
           haloR = sunR * 2.6;
         const sunUp = sunEl > 0.02,
           moonUp = moonEl > 0.02;
-        const sunCol = [255, 240, 160];
         // cloud colour
         const cR = lerp(48, 252, dayAmt) + dusk * 3,
           cG = lerp(54, 252, dayAmt) - dusk * 70,
@@ -688,11 +1227,11 @@
               }
               // stars
               if (nightF > 0.04 && ch[i] === " ") {
-                const ai = Math.floor(azC * 70),
-                  ei = Math.floor(te * 70);
+                const ai = Math.floor(azC * starBX),
+                  ei = Math.floor(te * starBY);
                 const h = hash(ai, ei, 77);
-                if (h < 0.024 && nightF > hash(ai, ei, 78) * 0.85) {
-                  const tw = 0.5 + 0.5 * Math.sin(worldTime * 3 + h * 900);
+                if (h < starP && nightF > hash(ai, ei, 78) * 0.85) {
+                  const tw = 0.5 + 0.5 * Math.sin(worldTime * 3 + (h / starP) * 21.6);
                   if (tw > 0.2) {
                     const h3 = hash(ai, ei, 79);
                     ch[i] =
@@ -736,7 +1275,7 @@
                 let fr = 70 + ph * 25,
                   fg = 135 + ph * 25,
                   fb = 215;
-                if (dist < 26 && ph < -0.8) chr = " ";
+                if (dist < 40 && ph < -0.8) chr = " ";
                 // sun / moon glitter on the water
                 if (ph > 0.25 && dist > 2) {
                   if (sunUp && sunDa < 0.1) {
@@ -753,7 +1292,7 @@
                 }
                 put(
                   i,
-                  dist > 30 ? " " : chr,
+                  dist > 60 ? " " : chr,
                   fr,
                   fg,
                   fb,
@@ -763,52 +1302,46 @@
                   dist,
                 );
               } else if (tp === SAND) {
-                const hh = hash(Math.floor(wx * 3), Math.floor(wy * 3), 17);
-                put(
-                  i,
-                  dist > 26 ? " " : SAND_CH[(hh * SAND_CH.length) | 0],
-                  232,
-                  212,
-                  158,
-                  196,
-                  176,
-                  120,
-                  dist,
-                );
+                const hh = hash(Math.floor(wx * 4), Math.floor(wy * 4), 17);
+                const sv = vnoise(wx * 0.8, wy * 0.8, 18);
+                const amp = 1 / (1 + dist * 0.1);
+                const R = 214 + sv * 16 + (hh - 0.5) * 12 * amp,
+                  G = 194 + sv * 14 + (hh - 0.5) * 12 * amp,
+                  B = 140 + sv * 12 + (hh - 0.5) * 10 * amp;
+                put(i, " ", R, G, B, R, G, B, dist);
               } else {
-                const hh = hash(Math.floor(wx * 3), Math.floor(wy * 3), 3);
-                const patch = vnoise(wx * 0.15, wy * 0.15, 4);
-                let chr =
-                  dist > 26 ? " " : GRASS_CH[(hh * GRASS_CH.length) | 0];
-                let fr = 50 + hh * 40 - patch * 20,
-                  fg = 112 + hh * 45 + patch * 40,
-                  fb = 40 + hh * 25;
-                if (dist < 22 && hash(tx, ty, 31) > 0.982 && hh > 0.4) {
-                  // wild flowers
-                  const fl = hash(tx, ty, 32);
-                  chr = "*";
-                  fr = fl < 0.5 ? 255 : 240;
-                  fg = fl < 0.5 ? 210 : 120;
-                  fb = fl < 0.5 ? 70 : 200;
+                // grass: plain, all green. Soft patches of lighter and darker green, no marks.
+                const patch = vnoise(wx * 0.12, wy * 0.12, 4);
+                const mid = vnoise(wx * 0.8, wy * 0.8, 5);
+                const fine = hash(Math.floor(wx * 5), Math.floor(wy * 5), 3);
+                const amp = 1 / (1 + dist * 0.1);
+                let R = 62 + patch * 20 + (mid - 0.5) * 16 * amp + (fine - 0.5) * 10 * amp,
+                  G = 134 + patch * 32 + (mid - 0.5) * 26 * amp + (fine - 0.5) * 18 * amp,
+                  B = 48 + patch * 8 + (mid - 0.5) * 8 * amp + (fine - 0.5) * 6 * amp;
+                if (tp === TREE) {
+                  // shade on the ground under a tree
+                  const d = Math.hypot(wx - tx - 0.5, wy - ty - 0.5);
+                  const m = GRASS_SHADE_TREE + (1 - GRASS_SHADE_TREE) * smoothstep(0.08, 0.5, d);
+                  R *= m;
+                  G *= m;
+                  B *= m;
+                } else if (tp === BUSH) {
+                  const d = Math.hypot(wx - tx - 0.5, wy - ty - 0.5);
+                  const m = 0.78 + 0.22 * smoothstep(0.05, 0.45, d);
+                  R *= m;
+                  G *= m;
+                  B *= m;
                 }
-                put(
-                  i,
-                  chr,
-                  fr,
-                  fg,
-                  fb,
-                  26 + patch * 14,
-                  64 + patch * 26,
-                  28,
-                  dist,
-                );
+                put(i, " ", R, G, B, R, G, B, dist);
               }
             }
           }
 
-          // ---- walls, mountains and trees: march a ray through the tile grid ----
+          // ---- walls, mountains, trees and bushes: march a ray through the tile grid ----
           filled.fill(0);
           nFilled = 0;
+          occTop = rows;
+          tStop = 1e9;
           let mapX = Math.floor(px),
             mapY = Math.floor(py);
           const ddx = Math.abs(1 / (rdx || 1e-9)),
@@ -830,109 +1363,97 @@
           }
           let side = 0,
             t = 0;
-          for (let n = 0; n < 160; n++) {
-            if (sdx < sdy) {
-              t = sdx;
-              sdx += ddx;
-              mapX += stepX;
-              side = 0;
-            } else {
-              t = sdy;
-              sdy += ddy;
-              mapY += stepY;
-              side = 1;
+          for (let n = 0; n < 520; n++) {
+            if (n > 0) {
+              // step into the next tile (n = 0 is the tile we are standing in)
+              if (sdx < sdy) {
+                t = sdx;
+                sdx += ddx;
+                mapX += stepX;
+                side = 0;
+              } else {
+                t = sdy;
+                sdy += ddy;
+                mapY += stepY;
+                side = 1;
+              }
+              if (t > MAXD || t > tStop) break;
             }
-            if (t > MAXD) break;
             if (mapX < 0 || mapY < 0 || mapX >= MW || mapY >= MH) {
-              drawSeg(c, t, 0, 11, MOUNT, side, 0.5, 0, 0, 0);
+              // the edge of the world: a distant ridge
+              const wx = px + rdx * t,
+                wy = py + rdy * t;
+              const hl = Math.sqrt(rdx * rdx + rdy * rdy);
+              const S = 6 + 8 * fbm(wx * 0.06, wy * 0.06, 51, 2);
+              terrainStrip(c, t, wx, wy, S, (rdx / hl) * 1.8, (rdy / hl) * 1.8);
               break;
             }
             const idx = mapY * MW + mapX,
               tp = tile[idx];
-            if (tp === MOUNT || tp === STONE) {
+            if (tp === GRASS || tp === WATER || tp === SAND) continue;
+            const tOut = sdx < sdy ? sdx : sdy;
+            if (tp === MOUNT) mountainTile(c, t, tOut, rdx, rdy);
+            else if (tp === STONE) {
               let u = side === 0 ? py + rdy * t : px + rdx * t;
               u -= Math.floor(u);
-              drawSeg(c, t, 0, hgt[idx], tp, side, u, mapX, mapY, 0);
-            } else if (tp === TREE) {
-              const h = hgt[idx],
-                v = vari[idx],
-                cx = mapX + 0.5,
-                cy = mapY + 0.5;
-              const capHalf = v === 1 ? 0.27 : 0.17;
-              const zs = [0, 0.55, h * 0.6],
-                ze = [0.75, h * 0.6, h],
-                kd = [10, 11, 12];
-              const hw = [0.09, 0.31, capHalf];
-              let cnt = 0;
-              const order = [0, 1, 2];
-              for (let k = 0; k < 3; k++) {
-                tT[k] = slab(rdx, rdy, cx, cy, hw[k]);
-                tS[k] = slabSide;
-                tU[k] = slabU;
-              }
-              order.sort(
-                (a, b) => (tT[a] < 0 ? 1e9 : tT[a]) - (tT[b] < 0 ? 1e9 : tT[b]),
-              );
-              for (let q = 0; q < 3; q++) {
-                const k = order[q];
-                if (tT[k] > 0)
-                  drawSeg(
-                    c,
-                    tT[k],
-                    zs[k],
-                    ze[k],
-                    kd[k],
-                    tS[k],
-                    tU[k],
-                    mapX,
-                    mapY,
-                    v,
-                  );
-              }
-            }
+              stoneStrip(c, t, hgt[idx], side, u, mapX, mapY);
+            } else treeTile(c, idx, mapX, mapY, rdx, rdy); // TREE or BUSH
             if (nFilled >= rows) break;
           }
         }
       }
 
-      // Copy the character grid onto the canvas.
+      // Copy the character grid into the pixel buffer, then onto the canvas.
       function present() {
-        let last = null;
+        const w = cv.width;
+        let lastChr = "",
+          mask = null;
         for (let r = 0; r < rows; r++) {
-          // 1) backgrounds, merged into runs of the same colour
-          const y = r * cellH,
-            base = r * cols;
-          let c = 0;
-          while (c < cols) {
-            const b = bgA[base + c];
-            let c2 = c + 1;
-            while (c2 < cols && bgA[base + c2] === b) c2++;
-            if (b !== last) {
-              ctx.fillStyle = b;
-              last = b;
-            }
-            ctx.fillRect(c * cellW, y, (c2 - c) * cellW, cellH);
-            c = c2;
-          }
-        }
-        last = null;
-        for (let r = 0; r < rows; r++) {
-          // 2) the characters themselves
-          const y = r * cellH,
-            base = r * cols;
+          const base = r * cols,
+            y0 = r * cellH;
           for (let c = 0; c < cols; c++) {
-            const chr = ch[base + c];
-            if (chr === " ") continue;
-            const f = fgA[base + c];
-            if (f !== last) {
-              ctx.fillStyle = f;
-              last = f;
+            const i = base + c;
+            const bg = bgA[i],
+              chr = ch[i];
+            let p = y0 * w + c * cellW;
+            if (chr === " ") {
+              for (let yy = 0; yy < cellH; yy++, p += w)
+                for (let xx = 0; xx < cellW; xx++) buf32[p + xx] = bg;
+              continue;
             }
-            if (chr === "█")
-              ctx.fillRect(c * cellW, y, cellW, cellH); // crisp full block, no font gaps
-            else ctx.fillText(chr, c * cellW + cellW / 2, y + cellH / 2 + 1);
+            const fg = fgA[i];
+            if (chr === "█") {
+              for (let yy = 0; yy < cellH; yy++, p += w)
+                for (let xx = 0; xx < cellW; xx++) buf32[p + xx] = fg;
+              continue;
+            }
+            if (chr !== lastChr) {
+              lastChr = chr;
+              mask = glyphMask(chr);
+            }
+            const br = bg & 255,
+              bgc = (bg >> 8) & 255,
+              bb = (bg >> 16) & 255;
+            const fr = fg & 255,
+              fgc = (fg >> 8) & 255,
+              fb = (fg >> 16) & 255;
+            let k = 0;
+            for (let yy = 0; yy < cellH; yy++, p += w)
+              for (let xx = 0; xx < cellW; xx++) {
+                let a = mask[k++];
+                if (a === 0) buf32[p + xx] = bg;
+                else if (a >= 250) buf32[p + xx] = fg;
+                else {
+                  a += a >> 7; // 0..256
+                  const rr = br + (((fr - br) * a) >> 8),
+                    gg = bgc + (((fgc - bgc) * a) >> 8),
+                    bl = bb + (((fb - bb) * a) >> 8);
+                  buf32[p + xx] = (0xff000000 | (bl << 16) | (gg << 8) | rr) >>> 0;
+                }
+              }
           }
         }
+        ctx.putImageData(img, 0, 0);
       }
 
       /* ---------- 5) HUD & MINIMAP ---------- */
@@ -952,6 +1473,7 @@
           hh = Math.floor(hrs),
           mm = Math.floor((hrs - hh) * 60);
         const icon = dayAmt > 0.5 ? "☀" : "☾";
+        const pd = Math.round((pitch * 180) / Math.PI);
         info.textContent =
           "Mountaineer   " +
           icon +
@@ -964,6 +1486,10 @@
           " " +
           String(Math.round(deg)).padStart(3, "0") +
           "°" +
+          "   look " +
+          (pd > 0 ? "+" : "") +
+          pd +
+          "°" +
           (showFps ? "   " + fps + " fps" : "");
       }
       const MINI_COL = [
@@ -973,6 +1499,7 @@
         "#7a746e",
         "#1b4a1f",
         "#a39f97",
+        "#2a7a3a",
       ];
       function drawMini() {
         const R = 20,
@@ -987,7 +1514,7 @@
               y = iy + j;
             const t = tileAt(x, y);
             mctx.fillStyle =
-              t === MOUNT && hgt[y * MW + x] > 4.8 ? "#e8eef5" : MINI_COL[t];
+              t === MOUNT && hgt[y * MW + x] > 5.2 ? "#e8eef5" : MINI_COL[t];
             mctx.fillRect((i + R) * S, (j + R) * S, S, S);
           }
         const cx = (R + (px - ix)) * S,
@@ -1035,6 +1562,14 @@
           info.style.display = help.style.display = showHud ? "block" : "none";
         }
         if (e.code === "KeyF") showFps = !showFps;
+        if (e.code === "BracketLeft" && qIdx > 0) {
+          qIdx--; // less detail (faster)
+          resize();
+        }
+        if (e.code === "BracketRight" && qIdx < QUALITY.length - 1) {
+          qIdx++; // more detail (slower)
+          resize();
+        }
         if (e.code === "Enter" && paused) startGame();
         if (e.code === "Escape" && !paused) setPaused(true);
       });
@@ -1072,11 +1607,7 @@
         if (paused) return;
         if (document.pointerLockElement === cv || dragging) {
           angle += e.movementX * 0.0025;
-          lookUp = clamp(
-            lookUp - (e.movementY / cellH) * 0.8,
-            -rows * 0.38,
-            rows * 0.38,
-          );
+          pitch = clamp(pitch - e.movementY * 0.0025, -PITCH_MAX, PITCH_MAX); // all the way up and down
         }
       });
 
@@ -1087,17 +1618,9 @@
           (keys.ArrowLeft || keys.KeyQ ? 1 : 0);
         angle += turn * 2.1 * dt;
         const pit =
-          (keys.PageUp || keys.KeyR ? 1 : 0) -
-          (keys.PageDown || keys.KeyF2 || keys.KeyV ? 1 : 0);
-        lookUp = clamp(
-          lookUp + pit * rows * 0.5 * dt,
-          -rows * 0.38,
-          rows * 0.38,
-        );
-        if (keys.ArrowUp)
-          lookUp = clamp(lookUp + rows * 0.5 * dt, -rows * 0.38, rows * 0.38);
-        if (keys.ArrowDown)
-          lookUp = clamp(lookUp - rows * 0.5 * dt, -rows * 0.38, rows * 0.38);
+          (keys.PageUp || keys.KeyR || keys.ArrowUp ? 1 : 0) -
+          (keys.PageDown || keys.KeyV || keys.ArrowDown ? 1 : 0);
+        pitch = clamp(pitch + pit * 1.4 * dt, -PITCH_MAX, PITCH_MAX);
         // walking
         const fwd = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
         const str = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
@@ -1114,7 +1637,7 @@
           if (!blocked(px, ny)) py = ny;
           bobT += dt * (keys.ShiftLeft || keys.ShiftRight ? 12 : 8);
         }
-        bob = lerp(bob, moving ? Math.sin(bobT) * 0.25 : 0, 0.2);
+        bob = lerp(bob, moving ? Math.sin(bobT) * 0.006 * K : 0, 0.2);
         // time
         timeOfDay = (timeOfDay + (dt / DAY_SECONDS) * (keys.KeyT ? 40 : 1)) % 1;
       }
