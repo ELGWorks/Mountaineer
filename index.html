@@ -4,6 +4,22 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mountaineer</title>
+
+    <!-- ♪ BACKGROUND MUSIC ──────────────────────────────────────────────────────────────────
+         Works like a Google Fonts link: paste a direct link to any calm .mp3 / .ogg / .m4a in
+         href="" below and it plays in the background (it starts when you click "begin").
+         Leave href="" empty, or if the link can't be loaded, a soft built-in ambient piece plays instead.
+         Suggested free sources (credit the artist when the licence asks for it):
+           incompetech.com (Kevin MacLeod, CC BY) · freemusicarchive.org · pixabay.com/music · archive.org
+         The "data-credit" text is shown quietly at the bottom of the screen once the song is playing. -->
+    <link
+      id="music"
+      rel="prefetch"
+      as="audio"
+      href="https://upload.wikimedia.org/wikipedia/commons/9/90/Erik_Satie_-_gymnopedies_-_la_1_ere._lent_et_douloureux.ogg"
+      data-credit="Music: “Gymnopédie No. 1” — Erik Satie (public domain recording, Wikimedia Commons)"
+    />
+
     <style>
       html,
       body {
@@ -39,7 +55,7 @@
       #help {
         left: 12px;
         bottom: 10px;
-        opacity: 0.75;
+        opacity: 0.7;
         font-size: 12px;
       }
       #mini {
@@ -48,6 +64,79 @@
         border: 1px solid #6a8;
         background: #000a;
         display: block;
+      }
+      #credit {
+        right: 14px;
+        top: 10px;
+        font-size: 11px;
+        opacity: 0;
+        transition: opacity 2s;
+        text-align: right;
+        max-width: 40vw;
+      }
+      /* subtitles while the walk-and-talk happens */
+      #dlg {
+        position: fixed;
+        left: 50%;
+        bottom: 34px;
+        transform: translateX(-50%);
+        width: min(780px, 92vw);
+        box-sizing: border-box;
+        padding: 14px 20px 12px;
+        background: rgba(10, 14, 20, 0.74);
+        border: 1px solid rgba(190, 235, 190, 0.35);
+        border-radius: 6px;
+        pointer-events: none;
+        display: none;
+        font-size: 18px;
+        line-height: 1.5;
+        color: #f2f6ee;
+        text-shadow: 0 1px 3px #000;
+      }
+      #dlgName {
+        font-size: 12px;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: #9fe39f;
+        margin-bottom: 4px;
+      }
+      #dlgHint {
+        text-align: right;
+        font-size: 11px;
+        opacity: 0.5;
+        margin-top: 4px;
+      }
+      #chapter {
+        position: fixed;
+        left: 0;
+        right: 0;
+        top: 24%;
+        text-align: center;
+        pointer-events: none;
+        font-size: clamp(22px, 3.6vw, 44px);
+        letter-spacing: 5px;
+        color: #fff6dc;
+        text-shadow:
+          0 0 18px rgba(255, 190, 110, 0.65),
+          0 2px 4px #000;
+        opacity: 0;
+        transition: opacity 1.4s;
+        padding: 0 5vw;
+      }
+      #toast {
+        position: fixed;
+        left: 50%;
+        top: 16%;
+        transform: translateX(-50%);
+        pointer-events: none;
+        font-size: 16px;
+        padding: 8px 16px;
+        background: rgba(10, 14, 20, 0.6);
+        border-radius: 5px;
+        opacity: 0;
+        transition: opacity 0.8s;
+        text-align: center;
+        max-width: 80vw;
       }
       #overlay {
         position: fixed;
@@ -65,10 +154,16 @@
         line-height: 1.45;
       }
       #overlay h1 {
-        margin: 0 0 14px;
+        margin: 0 0 6px;
         font-size: 34px;
         letter-spacing: 6px;
         color: #9fe39f;
+      }
+      #overlay .sub {
+        margin: 0 0 14px;
+        opacity: 0.75;
+        font-size: 14px;
+        letter-spacing: 2px;
       }
     </style>
   </head>
@@ -76,39 +171,104 @@
     <canvas id="game"></canvas>
     <div class="hud" id="info"></div>
     <div class="hud" id="help">
-      WASD move · ←/→ or Q/E turn · mouse look (all the way up/down) · Shift run
-      · T fast time · [ ] detail · M map · H hide HUD · F fps
+      WASD walk · mouse / ←→ look · Shift run · Z auto‑walk · hold T time flies · N music · M map · H hide HUD · Esc pause
     </div>
     <canvas class="hud" id="mini" width="164" height="164"></canvas>
+    <div class="hud" id="credit"></div>
+    <div id="chapter"></div>
+    <div id="toast"></div>
+    <div id="dlg">
+      <div id="dlgName"></div>
+      <div id="dlgText"></div>
+      <div id="dlgHint">Space · skip line</div>
+    </div>
 
     <div id="overlay">
       <div>
         <h1>Mountaineer</h1>
+        <p class="sub">a slow walk to the top</p>
         <pre>
- ▲▲  ▲   ~~~~~~   ☾    ♣ ♣ ♣
-╔══════════════════════════╗
-║  W A S D   walk / strafe ║
-║  ← →  or  Q E   turn     ║
-║  mouse     look (up/down)║
-║  Shift     run           ║
-║  T (hold)  speed up time ║
-║  [ and ]   detail level  ║
-║  M map   H HUD   F fps   ║
-║  Esc       pause         ║
-╚══════════════════════════╝
+ ▲▲▲   ▲     ☾      ♣ ♣ ♣
+╔══════════════════════════════╗
+║  W A S D     walk / strafe   ║
+║  mouse       look around     ║
+║  Shift       run             ║
+║  Z           auto-walk on/off║
+║  Space       skip a line     ║
+║  T  hold: time flies         ║
+║  N  music    M  map          ║
+║  Esc         pause           ║
+╚══════════════════════════════╝
 
-        click to start</pre
+   Follow the trail up the mountain.
+   Someone is waiting at the top.
+
+        click to begin</pre
         >
       </div>
     </div>
 
     <script>
-      "use strict";
-      /* =====================================================================
-   Mountaineer — one file, no libraries.
-   Parts:  1) helpers  2) world generator  3) player & collision
-           4) renderer (raycasting)  5) HUD & minimap  6) input & main loop
-   ===================================================================== */
+      /* =====================================================================================
+         0) YOUR WORDS — this is the part you edit.
+         At the top of the mountain the climber (you) walks a slow circle with the player and talks.
+         Every line is either plain text, or an object if you recorded your own voice:
+             "Plain text line."
+             { text: "Subtitle shown on screen", audio: "my-voice-01.mp3" }
+         (audio files sit next to this html file, or use a full web link; the line ends when the audio ends.)
+         ===================================================================================== */
+      const CONFIG = {
+        npcName: "The Climber", // name shown above the subtitles
+        voice: false, // true = the browser reads the lines aloud in a synthetic voice (V toggles it in game)
+      };
+      const DIALOGUE = {
+        // said when the player arrives at the summit
+        intro: [
+          "You made it. Slowly, one step at a time. That is the only way anyone gets up here.",
+          "Walk with me? There is a path that circles the summit. I have some things I want to say out loud.",
+          "Up here the big questions feel easier to ask.",
+        ],
+        // one block per question. Replace every "✎" line with what you really think.
+        topics: [
+          {
+            title: "Does God exist?",
+            lines: [
+              "✎ Your first thoughts on: does God exist?",
+              "✎ What has shaped what you believe about it: experiences, doubts, people, reasons.",
+              "✎ What you would say to someone who sees it differently.",
+            ],
+          },
+          {
+            title: "Is abortion acceptable?",
+            lines: [
+              "✎ Your thoughts on: is abortion acceptable?",
+              "✎ Where you draw lines, and why.",
+              "✎ What you find hard about it, or where you are still unsure.",
+            ],
+          },
+          {
+            title: "What do I think of this world?",
+            lines: [
+              "✎ Your thoughts on this world: what is beautiful about it, what is broken.",
+              "✎ What you wish people understood.",
+              "✎ What gives you hope.",
+            ],
+          },
+          {
+            title: "What is the meaning of life?",
+            lines: [
+              "✎ Your thoughts on: what is the meaning of life?",
+              "✎ What you live for, and what you would tell your younger self.",
+              "✎ How you want to be remembered.",
+            ],
+          },
+        ],
+        // said at the very end
+        outro: [
+          "Look at that light.",
+          "Thank you for walking with me. Stay as long as you like.",
+        ],
+      };
 
       /* ---------- 1) HELPERS ---------- */
       const FONT =
@@ -185,25 +345,130 @@
       }
 
       /* ---------- 2) WORLD GENERATOR ---------- */
-      const MW = 192,
-        MH = 192; // map size in tiles
-      const GRASS = 0,
-        WATER = 1,
-        SAND = 2,
-        MOUNT = 3,
-        TREE = 4,
-        STONE = 5,
-        BUSH = 6;
-      const tile = new Uint8Array(MW * MH); // what is on each tile
-      const hgt = new Float32Array(MW * MH); // how tall (mountains, trees, bushes, ruins)
+      // The world is real terrain now: one height for every tile corner (Hm). The big mountain in the
+      // middle is a cone with a trail wound around it like a spiral staircase; everything else is
+      // lowland (lakes, meadows, forest) circled by a belt of distant ranges.
+      const MW = 384,
+        MH = 384; // map size in tiles
+      const TREE = 4,
+        BUSH = 6,
+        CAIRN = 7; // 0 = nothing on this tile
+      const tile = new Uint8Array(MW * MH); // what stands on each tile
+      const hgt = new Float32Array(MW * MH); // how tall that thing is
       const vari = new Uint8Array(MW * MH); // tree / bush type
+      const tcx = new Float32Array(MW * MH); // where the trunk / bush really stands inside its tile
+      const tcy = new Float32Array(MW * MH);
+      const tileG = new Float32Array(MW * MH); // ground height under that trunk
       const SEED = 7;
-      const SPAWN_X = MW / 2,
-        SPAWN_Y = MH / 2;
-
-      // Mountains are smooth: every tile corner stores a height and the ground between corners is blended.
+      const CX = MW / 2,
+        CY = MH / 2; // the mountain's centre
+      const WL = 0; // water level
+      // ---- the climb: tweak these to make it longer / shorter / steeper ----
+      const R_START = 125; // radius where the trail begins (tiles from the centre)
+      const R_END = 13; // radius of the flat summit
+      const TURNS = 6.7; // how many times the trail circles the mountain
+      const SIGMA = 1.3; // steepness of the mountain flank (height gained per tile of radius)
+      const H_FOOT = 2.5;
+      const H_TOP = H_FOOT + SIGMA * (R_START - R_END); // summit height
+      const PHI0 = 2.35; // direction (angle) the trail starts from
       const W1 = MW + 1;
-      const cornerH = new Float32Array(W1 * (MH + 1));
+      const EXT = 140; // the height grid also covers 140 tiles beyond the map, so far ranges are cheap to draw
+      const WX = MW + 1 + 2 * EXT,
+        HX = MH + 1 + 2 * EXT;
+      const Hm = new Float32Array(WX * HX); // terrain height at every tile corner
+      const hI = (ix, iy) => (iy + EXT) * WX + ix + EXT;
+      const beltA = new Float32Array(W1 * (MH + 1)); // how much of that height is the outer mountain belt
+      const trailD = new Float32Array(W1 * (MH + 1)).fill(99); // distance to the trail
+      let trailLen = 0;
+      const START_X = CX + R_START * Math.cos(PHI0),
+        START_Y = CY + R_START * Math.sin(PHI0);
+      const SUMMIT_R = 9.2; // radius of the little loop path people walk at the top
+
+      // Ridged noise: 0..1, with sharp crest lines where plain noise crosses 0.5.
+      function rn(x, y, sd) {
+        const v = 1 - Math.abs(2 * vnoise(x, y, sd) - 1);
+        return v * v;
+      }
+      // Height (0..1) of a mountain range at a spot: broad massifs carrying ridge lines.
+      function ridgeH(x, y) {
+        const massif = fbm(x * 0.022, y * 0.022, 51, 2);
+        const r = 0.65 * rn(x * 0.04, y * 0.04, 52) + 0.28 * rn(x * 0.09, y * 0.09, 53) + 0.07 * rn(x * 0.2, y * 0.2, 54);
+        return clamp((massif - 0.3) * 1.8 + r * 0.5 - 0.02, 0.04, 1);
+      }
+      const smax = (a, b, k) => 0.5 * (a + b + Math.sqrt((a - b) * (a - b) + k * k)); // smooth maximum
+
+      // The trail: a spiral that starts far out and winds inwards (and upwards) to the summit.
+      function spiralPos(s) {
+        const rho = R_START + (R_END - R_START) * s,
+          phi = PHI0 + TURNS * Math.PI * 2 * s;
+        return [CX + rho * Math.cos(phi), CY + rho * Math.sin(phi), rho];
+      }
+      // The mountain itself: height depends only on the distance from the centre.
+      function coneH(r) {
+        return r >= R_END ? H_FOOT + SIGMA * (R_START - r) : H_TOP + 0.9 * (1 - (r / R_END) * (r / R_END));
+      }
+      function lowland(x, y) {
+        const l = (fbm(x * 0.016, y * 0.016, SEED, 4) - 0.43) * 15; // lakes where this dips below 0
+        const d = Math.hypot(x - START_X, y - START_Y);
+        const w = Math.exp(-(d / 24) * (d / 24)); // keep the start of the trail on dry, gentle ground
+        return lerp(l, 2.6, w);
+      }
+      // A ring of tall ranges around the edge of the map (and beyond it).
+      function beltRaw(x, y) {
+        const e = Math.min(x, y, MW - x, MH - y);
+        const f = 1 - smoothstep(0, 70, e);
+        let h = 30 * Math.pow(f, 1.4) * (0.45 + 0.8 * ridgeH(x * 0.8, y * 0.8)); // foothills along the edge
+        // beyond the edge of the map the real ranges rise: seen far away, above the clouds
+        if (e < 0) h += 96 * smoothstep(0, 110, -e) * (0.3 + 0.95 * ridgeH(x * 0.6 + 13, y * 0.6 + 7));
+        return h;
+      }
+      // Averaged over three nearby spots: rounds off needle-sharp crests (far ranges look soft and layered).
+      function beltAt(x, y) {
+        return (beltRaw(x, y) + beltRaw(x + 3.4, y - 2) + beltRaw(x - 3.4, y + 2)) * 0.3333;
+      }
+      // Terrain height before the trail is carved in. Also used for everything outside the map.
+      function baseHeight(x, y) {
+        const r = Math.hypot(x - CX, y - CY);
+        const rr = r * (1 + 0.04 * (fbm(x * 0.02, y * 0.02, 81, 3) - 0.5)); // not a perfect cone
+        const c = coneH(rr);
+        let h = smax(lowland(x, y), c, 5);
+        // rocky detail on the flanks (not on the summit, which stays gentle)
+        const rock = smoothstep(8, 35, c) * smoothstep(R_END, R_END + 10, r);
+        h += rock * ((rn(x * 0.045, y * 0.045, 71) - 0.3) * 5 + (rn(x * 0.12, y * 0.12, 72) - 0.3) * 1.6);
+        return h + beltAt(x, y);
+      }
+
+      // Terrain height at any spot (smooth, blended between the four nearest corners).
+      function Hs(x, y) {
+        if (x < -EXT || y < -EXT || x >= MW + EXT - 1 || y >= MH + EXT - 1) return baseHeight(x, y);
+        const ix = Math.floor(x),
+          iy = Math.floor(y),
+          fx = x - ix,
+          fy = y - iy,
+          k = hI(ix, iy);
+        const a = Hm[k],
+          b = Hm[k + 1],
+          c = Hm[k + WX],
+          d = Hm[k + WX + 1];
+        return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+      }
+      // Same blending for the other per-corner tables (belt, distance to trail).
+      function sampC(arr, x, y) {
+        if (x < 0) x = 0;
+        else if (x > MW - 0.001) x = MW - 0.001;
+        if (y < 0) y = 0;
+        else if (y > MH - 0.001) y = MH - 0.001;
+        const ix = x | 0,
+          iy = y | 0,
+          fx = x - ix,
+          fy = y - iy,
+          k = iy * W1 + ix;
+        const a = arr[k],
+          b = arr[k + 1],
+          c = arr[k + W1],
+          d = arr[k + W1 + 1];
+        return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+      }
 
       // Trees and bushes are built from simple 3D shapes (cones, cylinders, ellipsoids).
       // Each shape is 11 numbers in PP: kind, cx, cy, p1, p2, p3, p4, material, aux, zmin, zmax
@@ -216,180 +481,174 @@
       const partList = [];
       let curN = 0,
         curTop = 0;
+      // Every tree gets its own random size and its own spot inside its tile.
+      // Shapes are described around the tile middle (bX,bY); addPart scales them about that point
+      // (bRS sideways, bHS upwards) and then moves them to where this tree really stands (bTX,bTY).
+      let bX = 0,
+        bY = 0,
+        bTX = 0,
+        bTY = 0,
+        bRS = 1,
+        bHS = 1;
       function addPart(kind, cx, cy, p1, p2, p3, p4, mat, aux) {
-        const zmn = kind === 0 ? p1 : Math.max(0, p1 - p2);
-        const zmx = kind === 0 ? p2 : p1 + p2;
-        partList.push(kind, cx, cy, p1, p2, p3, p4, mat, aux, zmn, zmx);
+        const X = bTX + (cx - bX) * bRS,
+          Y = bTY + (cy - bY) * bRS;
+        const a1 = p1 * bHS,
+          a2 = p2 * (kind === 0 ? bHS : bHS),
+          a3 = p3 * bRS,
+          a4 = p4 * bRS;
+        const zmn = kind === 0 ? a1 : Math.max(0, a1 - a2);
+        const zmx = kind === 0 ? a2 : a1 + a2;
+        partList.push(kind, X, Y, a1, a2, a3, a4, mat, aux, zmn, zmx);
         curN++;
         if (zmx > curTop) curTop = zmx;
       }
 
-      function genWorld() {
-        for (let y = 0; y < MH; y++)
-          for (let x = 0; x < MW; x++) {
-            let e = fbm(x * 0.028, y * 0.028, SEED, 5);
-            e = clamp((e - 0.5) * 1.9 + 0.5, 0, 1); // stretch so we get real lakes & peaks
-            const dsp = Math.hypot(x - SPAWN_X, y - SPAWN_Y);
-            const w = Math.exp(-(dsp / 12) * (dsp / 12)); // flatten ground around the start
-            e = e * (1 - w) + 0.52 * w;
-            const edge = Math.min(x, y, MW - 1 - x, MH - 1 - y); // raise a mountain wall around the world
-            const b = clamp((14 - edge) / 14, 0, 1);
-            e += b * b * 0.6;
-            const i = y * MW + x;
-            if (e < 0.37) tile[i] = WATER;
-            else if (e < 0.405) tile[i] = SAND;
-            else if (e > 0.7) {
-              tile[i] = MOUNT;
-              const q = (e - 0.7) / 0.3;
-              hgt[i] = Math.min(
-                13.5,
-                1.4 + Math.pow(q, 1.15) * 7.2 + hash(x, y, 4) * 0.6,
-              );
-            } else tile[i] = GRASS;
-          }
 
-        // Mountains need to be at least 2 tiles wide to be drawn smoothly, so thin 1-tile slivers become grass.
-        {
-          const snap = tile.slice();
-          const isM = (x, y) =>
-            x < 0 || y < 0 || x >= MW || y >= MH ? true : snap[y * MW + x] === MOUNT;
-          for (let y = 0; y < MH; y++)
-            for (let x = 0; x < MW; x++) {
-              const i = y * MW + x;
-              if (snap[i] !== MOUNT) continue;
-              let keep = false;
-              for (let oy = -1; oy <= 0 && !keep; oy++)
-                for (let ox = -1; ox <= 0; ox++) {
-                  if (
-                    isM(x + ox, y + oy) &&
-                    isM(x + ox + 1, y + oy) &&
-                    isM(x + ox, y + oy + 1) &&
-                    isM(x + ox + 1, y + oy + 1)
-                  ) {
-                    keep = true;
-                    break;
-                  }
-                }
-              if (!keep) {
-                tile[i] = GRASS;
-                hgt[i] = 0;
+      // Cut the trail into the mountain: a flat ledge along the spiral, blended into the slope around it.
+      function carveTrail() {
+        const RB = 9,
+          N = 9000;
+        const ht2 = new Float32Array(W1 * (MH + 1));
+        let px0 = 0,
+          py0 = 0,
+          len = 0;
+        for (let n = 0; n <= N; n++) {
+          const p = spiralPos(n / N);
+          if (n > 0) len += Math.hypot(p[0] - px0, p[1] - py0);
+          px0 = p[0];
+          py0 = p[1];
+          const ht = smax(2.6, coneH(p[2]), 5); // same smoothing the foot of the mountain has
+          const x0 = Math.max(0, Math.floor(p[0] - RB)),
+            x1 = Math.min(MW, Math.ceil(p[0] + RB)),
+            y0 = Math.max(0, Math.floor(p[1] - RB)),
+            y1 = Math.min(MH, Math.ceil(p[1] + RB));
+          for (let iy = y0; iy <= y1; iy++)
+            for (let ix = x0; ix <= x1; ix++) {
+              const d = Math.hypot(ix - p[0], iy - p[1]);
+              const k = iy * W1 + ix;
+              if (d < trailD[k]) {
+                trailD[k] = d;
+                ht2[k] = ht;
               }
             }
         }
+        trailLen = len;
+        for (let iy = 0; iy <= MH; iy++)
+          for (let ix = 0; ix <= MW; ix++) {
+            const k = iy * W1 + ix;
+            if (trailD[k] < RB) {
+              const w = 1 - smoothstep(2.4, 8.5, trailD[k]);
+              const kk = hI(ix, iy);
+              Hm[kk] = lerp(Hm[kk], ht2[k], w);
+            }
+          }
+        // a worn path ring around the summit where people walk
+        for (let iy = 0; iy <= MH; iy++)
+          for (let ix = 0; ix <= MW; ix++) {
+            const r = Math.hypot(ix - CX, iy - CY);
+            if (r < SUMMIT_R + 5 && r > SUMMIT_R - 5) {
+              const k = iy * W1 + ix;
+              trailD[k] = Math.min(trailD[k], Math.abs(r - SUMMIT_R));
+            }
+          }
+      }
 
-        // trees: sparse everywhere, thick in "forest" patches. Bushes: scattered, more around forests.
+      // Trees, bushes and cairns (small stacks of stones marking the trail).
+      function placeObjects() {
         for (let y = 0; y < MH; y++)
           for (let x = 0; x < MW; x++) {
+            const cx = x + 0.5,
+              cy = y + 0.5;
+            const r = Math.hypot(cx - CX, cy - CY);
+            if (r < R_END + 5) continue; // the summit stays open
+            if (Math.hypot(cx - START_X, cy - START_Y) < 7) continue; // and so does the trailhead
+            const h = Hs(cx, cy);
+            if (h < WL + 0.9) continue;
+            const td = sampC(trailD, cx, cy);
+            const gx = (Hs(cx + 0.6, cy) - Hs(cx - 0.6, cy)) / 1.2,
+              gy = (Hs(cx, cy + 0.6) - Hs(cx, cy - 0.6)) / 1.2;
+            const sl = Math.hypot(gx, gy);
+            if (sl > 1.55) continue;
             const i = y * MW + x;
-            if (tile[i] !== GRASS) continue;
-            if (Math.hypot(x - SPAWN_X, y - SPAWN_Y) < 5) continue;
             const f = fbm(x * 0.07, y * 0.07, 23, 3);
-            const p = 0.035 + 0.55 * smoothstep(0.48, 0.66, f);
-            if (hash(x, y, 5) < p) {
+            const treeAlt = 1 - smoothstep(0.28 * H_TOP, 0.5 * H_TOP, h); // trees thin out and stop up high
+            const p = (0.035 + 0.5 * smoothstep(0.46, 0.64, f)) * treeAlt * (1 - 0.5 * smoothstep(0.9, 1.5, sl));
+            if (td > 4.8 && hash(x, y, 5) < p) {
               tile[i] = TREE;
               const v = hash(x, y, 6);
-              vari[i] = v < 0.5 ? 0 : v < 0.92 ? 1 : 2; // pine / oak / autumn
-            } else {
+              const pineP = 0.5 + 0.45 * smoothstep(8, 60, h); // more pines the higher you go
+              vari[i] = v < pineP ? 0 : v < pineP + (1 - pineP) * 0.92 ? 1 : 2; // pine / oak / autumn
+            } else if (td > 3.4) {
               const fb = fbm(x * 0.1, y * 0.1, 41, 2);
               const pb =
-                0.02 + 0.17 * smoothstep(0.5, 0.68, fb) + 0.08 * smoothstep(0.42, 0.6, f);
+                (0.02 + 0.17 * smoothstep(0.5, 0.68, fb) + 0.08 * smoothstep(0.42, 0.6, f)) *
+                (1 - smoothstep(0.35 * H_TOP, 0.6 * H_TOP, h));
               if (hash(x, y, 43) < pb) {
                 tile[i] = BUSH;
                 const v = hash(x, y, 44);
-                vari[i] = v < 0.6 ? 0 : v < 0.85 ? 1 : 2; // green / dark / flowering
+                vari[i] = v < 0.6 ? 0 : v < 0.85 ? 1 : 2;
               }
             }
           }
-
-        // stone ruins: 5x5 rings of broken wall with a doorway
-        let placed = 0;
-        for (let n = 0; n < 400 && placed < 8; n++) {
-          const rx = 12 + Math.floor(hash(n, 1, 90) * (MW - 24)),
-            ry = 12 + Math.floor(hash(n, 2, 90) * (MH - 24));
-          if (Math.hypot(rx - SPAWN_X, ry - SPAWN_Y) < 14) continue;
-          let ok = true;
-          for (let j = -4; j <= 4 && ok; j++)
-            for (let i2 = -4; i2 <= 4; i2++) {
-              const t = tile[(ry + j) * MW + rx + i2];
-              if (t === WATER || t === MOUNT || t === STONE) {
-                ok = false;
-                break;
-              }
+        // cairns along the trail, one every ~70 tiles of walking, on the uphill side of the path
+        let acc = 0,
+          next = 35,
+          prev = null;
+        for (let n = 0; n <= 9000; n++) {
+          const p = spiralPos(n / 9000);
+          if (prev) acc += Math.hypot(p[0] - prev[0], p[1] - prev[1]);
+          prev = p;
+          if (acc >= next) {
+            next += 70;
+            const x = Math.floor(p[0] + ((CX - p[0]) / p[2]) * 2.3),
+              y = Math.floor(p[1] + ((CY - p[1]) / p[2]) * 2.3);
+            const i = y * MW + x;
+            if (x > 0 && y > 0 && x < MW && y < MH && tile[i] === 0) {
+              tile[i] = CAIRN;
+              vari[i] = 0;
             }
-          if (!ok) continue;
-          for (let j = -3; j <= 3; j++)
-            for (let i2 = -3; i2 <= 3; i2++) {
-              const k = (ry + j) * MW + rx + i2;
-              tile[k] = GRASS;
-              hgt[k] = 0;
-            }
-          const door = Math.floor(hash(n, 3, 90) * 4);
-          for (let j = -2; j <= 2; j++)
-            for (let i2 = -2; i2 <= 2; i2++) {
-              if (Math.max(Math.abs(i2), Math.abs(j)) !== 2) continue;
-              const mid =
-                (door === 0 && j === -2 && i2 === 0) ||
-                (door === 1 && i2 === 2 && j === 0) ||
-                (door === 2 && j === 2 && i2 === 0) ||
-                (door === 3 && i2 === -2 && j === 0);
-              if (mid) continue;
-              const k = (ry + j) * MW + rx + i2;
-              if (hash(k, n, 91) < 0.22) continue; // crumbled gap
-              tile[k] = STONE;
-              hgt[k] = 1.3 + hash(k, n, 92) * 1.0;
-            }
-          placed++;
+          }
         }
-        // make sure the spawn point is clear
-        for (let j = -2; j <= 2; j++)
-          for (let i2 = -2; i2 <= 2; i2++) {
-            const k = (SPAWN_Y + j) * MW + SPAWN_X + i2;
-            if (tile[k] !== GRASS) {
-              tile[k] = GRASS;
-              hgt[k] = 0;
-            }
-          }
-
-        buildCorners();
-        buildParts();
+        // one at the very start so you know where to go
+        {
+          const x = Math.floor(START_X + 2),
+            y = Math.floor(START_Y - 2);
+          tile[y * MW + x] = CAIRN;
+        }
       }
 
-      // Height of every tile corner = the lowest of the 4 tiles touching it (non-mountain tiles count as 0).
-      // That makes mountains start at ground level at their edges and rise smoothly inwards.
-      function buildCorners() {
-        for (let j = 0; j <= MH; j++)
-          for (let i = 0; i <= MW; i++) {
-            let m = 1e9;
-            for (let dj = -1; dj <= 0; dj++)
-              for (let di = -1; di <= 0; di++) {
-                const tx = i + di,
-                  ty = j + dj;
-                let h;
-                if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) h = 14;
-                else {
-                  const k = ty * MW + tx;
-                  h = tile[k] === MOUNT ? hgt[k] : 0;
-                }
-                if (h < m) m = h;
-              }
-            cornerH[j * W1 + i] = m;
-          }
-      }
-
-      // Build the 3D shapes for each tree and bush.
-      // Every shape stays inside its own tile (max 0.5 from the tile centre) so the ray marcher never misses it.
+      // Every tree gets a random size and a random spot inside its tile. A shape never reaches further than
+      // 0.49 from the tile centre, so the ray marcher (which looks at one tile at a time) never misses it.
       function buildParts() {
         for (let y = 0; y < MH; y++)
           for (let x = 0; x < MW; x++) {
             const i = y * MW + x,
               tp = tile[i];
-            if (tp !== TREE && tp !== BUSH) continue;
-            const cx0 = x + 0.5 + (hash(x, y, 100) - 0.5) * 0.14,
-              cy0 = y + 0.5 + (hash(x, y, 101) - 0.5) * 0.14;
+            if (tp !== TREE && tp !== BUSH && tp !== CAIRN) continue;
+            const type = vari[i];
+            // random size and position
+            const rs =
+              tp === CAIRN ? 1 : tp === TREE ? 0.62 + 0.52 * hash(x, y, 106) : 0.7 + 0.5 * hash(x, y, 106);
+            const hs = rs * (0.85 + 0.4 * hash(x, y, 107));
+            const maxR = tp === TREE && type === 0 ? 0.37 : 0.4;
+            const jr = Math.max(0.005, 0.49 - maxR * rs);
+            const ja = hash(x, y, 108) * 6.2832,
+              jm = jr * Math.sqrt(hash(x, y, 109));
+            bX = x + 0.5;
+            bY = y + 0.5;
+            bRS = rs;
+            bHS = hs;
+            bTX = bX + Math.cos(ja) * jm;
+            bTY = bY + Math.sin(ja) * jm;
+            tcx[i] = bTX;
+            tcy[i] = bTY;
+            tileG[i] = groundUnder(bTX, bTY);
+            const cx0 = bX,
+              cy0 = bY;
             partOff[i] = partList.length;
             curN = 0;
             curTop = 0;
-            const type = vari[i];
             if (tp === TREE) {
               const r1 = hash(x, y, 102),
                 r2 = hash(x, y, 103),
@@ -436,6 +695,20 @@
                   );
                 }
               }
+            } else if (tp === CAIRN) {
+              // cairn: a little stack of flat stones that marks the trail
+              const L = [
+                [0.1, 0.1, 0.3],
+                [0.27, 0.085, 0.24],
+                [0.42, 0.07, 0.18],
+                [0.54, 0.06, 0.13],
+                [0.64, 0.05, 0.085],
+              ];
+              for (let k = 0; k < L.length; k++) {
+                const ox = (hash(x, y, 150 + k) - 0.5) * 0.05,
+                  oy = (hash(x, y, 160 + k) - 0.5) * 0.05;
+                addPart(1, cx0 + ox, cy0 + oy, L[k][0], L[k][1], L[k][2], 0, 7, k / 4);
+              }
             } else {
               // bush: 2-4 overlapping green lumps
               const mat = type === 0 ? 4 : type === 1 ? 5 : 6;
@@ -464,78 +737,158 @@
           }
         PP = Float32Array.from(partList);
       }
+
+
+      // A layer of cloud floating between CLB and CLT: you walk up through it, and from above it is a sea of clouds.
+      const CLB = 96,
+        CLT = 106;
+      const cloudH = new Float32Array(W1 * (MH + 1));
+      function cloudFormula(x, y) {
+        const m = fbm(x * 0.011 + 3.7, y * 0.011 + 1.9, 91, 3);
+        const thick = smoothstep(0.3, 0.42, m);
+        const bump = (vnoise(x * 0.06, y * 0.06, 92) - 0.5) * 3.4 + (vnoise(x * 0.17, y * 0.17, 93) - 0.5) * 1.4;
+        return CLT - 30 * (1 - thick) + bump * thick;
+      }
+      function cloudAt(x, y) {
+        if (x < 0 || y < 0 || x >= MW || y >= MH) return cloudFormula(x, y);
+        return sampC(cloudH, x, y);
+      }
+
+      // Lowest of a few ground heights around a trunk, so trees never float on a slope.
+      function groundUnder(x, y) {
+        const r = 0.28;
+        return Math.min(Hs(x, y), Hs(x + r, y), Hs(x - r, y), Hs(x, y + r), Hs(x, y - r)) - 0.03;
+      }
+
+      // How steep the ground is at a spot (height gained per tile walked).
+      function slopeAt(x, y) {
+        const gx = (Hs(x + 0.5, y) - Hs(x - 0.5, y)),
+          gy = (Hs(x, y + 0.5) - Hs(x, y - 0.5));
+        return Math.hypot(gx, gy);
+      }
+
+      let ZMAX = 100; // tallest thing in the world (lets rays stop early)
+      function genWorld() {
+        for (let iy = -EXT; iy <= MH + EXT; iy++)
+          for (let ix = -EXT; ix <= MW + EXT; ix++) {
+            Hm[hI(ix, iy)] = baseHeight(ix, iy);
+            if (ix >= 0 && iy >= 0 && ix <= MW && iy <= MH) {
+              const k = iy * W1 + ix;
+              beltA[k] = beltAt(ix, iy);
+              cloudH[k] = cloudFormula(ix, iy);
+            }
+          }
+        carveTrail();
+        placeObjects();
+        buildParts();
+        let mx = 0;
+        for (let k = 0; k < Hm.length; k++) if (Hm[k] > mx) mx = Hm[k];
+        ZMAX = Math.max(mx, CLT + 4) + 4;
+      }
       genWorld();
 
       function tileAt(x, y) {
-        if (x < 0 || y < 0 || x >= MW || y >= MH) return MOUNT;
+        if (x < 0 || y < 0 || x >= MW || y >= MH) return 0;
         return tile[y * MW + x];
       }
 
-      // Smooth mountain surface height at a world position (0 everywhere that is not mountain).
-      function baseH(x, y) {
-        if (x < 0) x = 0;
-        else if (x > MW - 0.0001) x = MW - 0.0001;
-        if (y < 0) y = 0;
-        else if (y > MH - 0.0001) y = MH - 0.0001;
-        const ix = x | 0,
-          iy = y | 0,
-          fx = x - ix,
-          fy = y - iy;
-        const k = iy * W1 + ix;
-        const a = cornerH[k],
-          b = cornerH[k + 1],
-          c = cornerH[k + W1],
-          d = cornerH[k + W1 + 1];
-        return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
-      }
-      // Rocky bumps and ridges: multiplies the smooth height by 0.72 .. 1.28 (so zero stays zero).
-      function mtnDetail(x, y) {
-        return (
-          0.72 + 0.56 * (0.65 * vnoise(x * 0.9, y * 0.9, 11) + 0.35 * vnoise(x * 2.3, y * 2.3, 12))
-        );
-      }
 
       /* ---------- 3) PLAYER & COLLISION ---------- */
-      let px = SPAWN_X + 0.5,
-        py = SPAWN_Y + 0.5; // position in tiles
-      let angle = 0.35; // 0 = east (+x), clockwise as it grows
-      let pitch = 0; // vertical look in radians: + is up, - is down (up to almost straight up / down)
+      const EYE = 1.62; // eye height above the ground
+      const WALK = 2.5,
+        RUN = 4.6; // tiles per second
+      const PR = 0.2; // body radius
+      // The trail, as a list of points (used by auto-walk and for finding where you are on it).
+      const TN = 6000;
+      const trailPts = new Float32Array((TN + 1) * 2);
+      for (let n = 0; n <= TN; n++) {
+        const p = spiralPos(n / TN);
+        trailPts[n * 2] = p[0];
+        trailPts[n * 2 + 1] = p[1];
+      }
+      let trailIdx = 0; // where on the trail you are (index into trailPts)
+      function trackTrail() {
+        let best = 1e9,
+          bi = trailIdx;
+        const a = Math.max(0, trailIdx - 160),
+          b = Math.min(TN, trailIdx + 160);
+        for (let n = a; n <= b; n++) {
+          const dx = trailPts[n * 2] - px,
+            dy = trailPts[n * 2 + 1] - py;
+          const d = dx * dx + dy * dy;
+          if (d < best) {
+            best = d;
+            bi = n;
+          }
+        }
+        trailIdx = bi;
+      }
+      {
+        const n0 = 14;
+        var px = trailPts[n0 * 2],
+          py = trailPts[n0 * 2 + 1];
+        trailIdx = n0;
+      }
+      let angle = Math.atan2(trailPts[30 * 2 + 1] - py, trailPts[30 * 2] - px); // 0 = east (+x), clockwise as it grows
+      let pitch = 0.04; // vertical look in radians: + is up, - is down
       const PITCH_MAX = 1.553; // about 89 degrees
       let bobT = 0,
         bob = 0,
         moving = 0;
-      const eyeH = 0.55,
-        PR = 0.2; // eye height and player radius
+      let eyeZ = Hs(px, py) + EYE; // eye height in the world
+      let eyeH = EYE; // eye height above the ground under whatever tree / bush is being drawn
 
-      // Is a circle at (x,y) touching something solid?
+      // Can you stand here? Water, the map edge and steep mountain walls say no.
+      // (Off the trail you can only walk on gentle ground low down; up the mountain you stay on the path.)
+      function walkable(x, y) {
+        if (x < 2 || y < 2 || x > MW - 2 || y > MH - 2) return false;
+        const h = Hs(x, y);
+        if (h < WL + 0.1) return false;
+        if (h > 9 && Math.hypot(x - CX, y - CY) > R_END + 1.5 && sampC(trailD, x, y) > 5.3) return false;
+        return true;
+      }
+
+      // Is a circle at (x,y) touching something solid? (Bushes are soft: you can walk straight through them.)
       function blocked(x, y) {
         const ix = Math.floor(x),
           iy = Math.floor(y);
         for (let j = iy - 1; j <= iy + 1; j++)
           for (let i = ix - 1; i <= ix + 1; i++) {
             const t = tileAt(i, j);
-            if (t === MOUNT || t === STONE || t === WATER) {
-              // square obstacles
-              const nx = clamp(x, i, i + 1),
-                ny = clamp(y, j, j + 1);
-              const dx = x - nx,
-                dy = y - ny;
-              if (dx * dx + dy * dy < PR * PR) return true;
-            } else if (t === TREE || t === BUSH) {
-              // trees and bushes block a round area around their middle
-              const dx = x - (i + 0.5),
-                dy = y - (j + 0.5);
-              if (dx * dx + dy * dy < 0.2025) return true;
+            if (t === TREE) {
+              const k = j * MW + i;
+              const dx = x - tcx[k],
+                dy = y - tcy[k];
+              if (dx * dx + dy * dy < 0.1089) return true;
+            } else if (t === CAIRN) {
+              const k = j * MW + i;
+              const dx = x - tcx[k],
+                dy = y - tcy[k];
+              if (dx * dx + dy * dy < 0.13) return true;
             }
           }
         return false;
+      }
+      // Move one step if the ground allows it (not too steep, not water, nothing in the way).
+      function tryMove(nx, ny) {
+        const d = Math.hypot(nx - px, ny - py);
+        if (d < 1e-6) return false;
+        if (!walkable(nx, ny) || blocked(nx, ny)) return false;
+        if (Math.abs(Hs(nx, ny) - Hs(px, py)) > 1.0 * d) return false;
+        px = nx;
+        py = ny;
+        return true;
       }
 
       /* ---------- 4) RENDERER ---------- */
       const cv = document.getElementById("game");
       const ctx = cv.getContext("2d");
       let cols, rows, cellW, cellH, K, P, pxPerUnit;
-      let ch, fgA, bgA, filled, rowDist, skyBg;
+      let ch, fgA, bgA, filled, filled0, skyLUT;
+      let Frow, Urow, lamRow, sRow, rowValid;
+      const skyR = new Float32Array(256),
+        skyG = new Float32Array(256),
+        skyB = new Float32Array(256);
       let img, buf32;
       let starBX = 1,
         starBY = 1,
@@ -546,6 +899,13 @@
       // Detail levels (text rows on screen). [ and ] change it while playing.
       const QUALITY = [56, 72, 90, 112, 140];
       let qIdx = 2;
+
+      // Camera look-up / look-down. Every screen cell has a true ray (forward F, sideways lat, up U) made
+      // by tilting the camera, so the sky and the ground are never stretched. cp / sp = cos / sin of the
+      // pitch, yc = the screen row of the view centre.
+      let cp = 1,
+        sp = 0,
+        yc = 0;
 
       function resize() {
         // very large screens are drawn at half size and stretched, so it stays fast
@@ -568,8 +928,14 @@
         fgA = new Uint32Array(N);
         bgA = new Uint32Array(N);
         filled = new Uint8Array(rows);
-        rowDist = new Float32Array(rows);
-        skyBg = new Uint32Array(rows);
+        filled0 = new Uint8Array(rows);
+        Frow = new Float32Array(rows);
+        Urow = new Float32Array(rows);
+        lamRow = new Float32Array(rows);
+        sRow = new Float32Array(rows);
+        rowValid = new Uint8Array(rows);
+        zb = new Float32Array(N);
+        skyLUT = new Uint32Array(256);
         pxPerUnit = (cols * cellW) / 2 / P;
         K = pxPerUnit / cellH; // text rows per world unit at distance 1
         // star bins are one text cell big; the chance keeps the same number of stars on screen as before
@@ -618,7 +984,7 @@
 
       // ----- time of day -----
       let timeOfDay = 0.3; // 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
-      const DAY_SECONDS = 360;
+      const DAY_SECONDS = 150; // length of one whole day, in seconds (change it to make days longer / shorter)
       let sunAz = 0,
         sunEl = 0,
         moonAz = 0,
@@ -633,7 +999,7 @@
         FR = 0,
         FG = 0,
         FB = 0,
-        fogK = 0.0085; // thin haze: far mountains fade gently into the sky colour
+        fogK = 0.0078; // thin haze: far mountains fade gently into the sky colour
       let LX = 0,
         LY = 0,
         LZ = 1; // direction towards the sun (or moon at night)
@@ -651,41 +1017,49 @@
         nightF = 1 - dayAmt;
         dusk = Math.exp(-Math.pow(s / 0.2, 2));
         // sky colours
-        const topR = lerp(6, 62, dayAmt),
+        const topR = lerp(6, 62, dayAmt) + 34 * dusk,
           topG = lerp(9, 122, dayAmt),
           topB = lerp(30, 228, dayAmt);
         let horR = lerp(18, 168, dayAmt),
           horG = lerp(24, 206, dayAmt),
           horB = lerp(55, 246, dayAmt);
-        horR = lerp(horR, 255, dusk * 0.6);
-        horG = lerp(horG, 140, dusk * 0.6);
-        horB = lerp(horB, 85, dusk * 0.6);
+        horR = lerp(horR, 255, dusk * 0.8);
+        horG = lerp(horG, 150, dusk * 0.8);
+        horB = lerp(horB, 96, dusk * 0.8);
         FR = horR;
         FG = horG;
         FB = horB;
-        LR = (0.2 + 0.8 * dayAmt) * (1 + 0.18 * dusk);
-        LG = 0.26 + 0.74 * dayAmt;
-        LB = (0.42 + 0.58 * dayAmt) * (1 - 0.2 * dusk);
-        for (let r = 0; r < rows; r++) {
-          const q = (horizon - (r + 0.5)) / K;
-          const e = q > 0 ? Math.min(1, Math.pow(q / 0.95, 0.6)) : 0;
-          skyBg[r] = rgb(
-            lerp(horR, topR, e),
-            lerp(horG, topG, e),
-            lerp(horB, topB, e),
-          );
+        LR = (0.32 + 0.68 * dayAmt) * (1 + 0.18 * dusk);
+        LG = 0.4 + 0.6 * dayAmt;
+        LB = (0.62 + 0.38 * dayAmt) * (1 - 0.2 * dusk);
+        // sky gradient lookup: index 0 = horizon, 255 = high up
+        for (let k = 0; k < 256; k++) {
+          const e = k / 255;
+          const r = lerp(horR, topR, e),
+            g = lerp(horG, topG, e),
+            b = lerp(horB, topB, e);
+          skyR[k] = r;
+          skyG[k] = g;
+          skyB[k] = b;
+          skyLUT[k] = rgb(r, g, b);
         }
       }
 
       function celestial(az, el, o) {
-        // where on screen is a sun/moon?
-        const d = angDiff(az, angle);
-        if (Math.abs(d) > 1.4 || el < -0.12) {
+        // where on screen is a sun/moon? (true projection, so it follows the tilted camera)
+        const d = az - angle;
+        const ce = Math.cos(el);
+        const fw = ce * Math.cos(d),
+          rt = ce * Math.sin(d),
+          up = Math.sin(el);
+        const F = fw * cp + up * sp,
+          U = up * cp - fw * sp;
+        if (F < 0.05 || el < -0.12) {
           o.vis = false;
           return;
         }
-        o.x = (cols * cellW) / 2 + Math.tan(d) * pxPerUnit;
-        o.y = horizon * cellH - (K * cellH * Math.tan(el)) / Math.cos(d);
+        o.x = (cols * cellW) / 2 + (rt / F) * pxPerUnit;
+        o.y = (yc - (U / F) * K) * cellH;
         o.vis = true;
       }
 
@@ -705,159 +1079,315 @@
           bb * LB * g + FB * f,
         );
       }
+      // Same, but the colours are already final (no daylight tint): only the fog is applied.
+      function putRaw(i, chr, fr, fg, fb, br, bg, bb, d) {
+        const f = 1 - Math.exp(-d * fogK),
+          g = 1 - f;
+        ch[i] = chr;
+        fgA[i] = rgbf(fr * g + FR * f, fg * g + FG * f, fb * g + FB * f);
+        bgA[i] = rgbf(br * g + FR * f, bg * g + FG * f, bb * g + FB * f);
+      }
 
-      const MAXD = 230; // how far (in tiles) the renderer looks
-      const ZMAX = 17; // tallest thing in the world (used to stop the ray early)
+
+      /* ---------- 4b) TERRAIN RENDERING ---------- */
+      // For every screen column a ray walks away from the player. Along the way the ground height is sampled;
+      // each sample is a vertical strip from the top of the ground down to whatever is already drawn in front.
+      // (Trees are drawn first inside each tile, then the ground in that tile.)
+      const MAXD = 330; // how far (in tiles) the renderer looks
+      const TREE_D = 75; // trees and bushes are individually drawn up to here; beyond it the ground colour hints at forest
       let nFilled = 0,
         occTop = 0,
         tStop = 1e9;
+      let EB = 0; // eye height in the world
+      let eh = EYE; // eye height above the ground of the tree being drawn
+      let zb; // depth of whatever is drawn in each text cell (so the NPC can hide behind things)
+      let gDirX = 1,
+        gDirY = 0,
+        gLat = 0,
+        gRdx = 1,
+        gRdy = 0,
+        gRl = 1,
+        gCol = 0,
+        prevT = 0,
+        prevS = 0;
+      let cloudOn = false;
 
-      // Called after a strip that covers every row from r0 down to the ground: anything further away
+      // Screen row of a point at depth t and height z (true projection with the camera tilted).
+      function rowOf(t, z) {
+        const h = z - EB;
+        const num = h * cp - t * sp,
+          den = t * cp + h * sp;
+        if (den < 1e-4) return num > 0 ? -1e6 : 1e6; // behind the camera
+        return yc - (K * num) / den;
+      }
+      // Called after a strip that covers every row from r0 down to what is already drawn: anything further away
       // can only show above row r0, so once nothing can be that tall any more the ray can stop.
       function markOpaque(r0) {
         if (r0 < occTop) {
           occTop = r0;
-          const hd = horizon - r0;
-          if (hd > 1e-6) {
-            const ts = ((ZMAX - eyeH) * K) / hd;
-            if (ts < tStop) tStop = ts;
+          if (r0 > 0) {
+            const s = sRow[r0 - 1];
+            if (s > 1e-6) {
+              const ts = (ZMAX - EB) / s;
+              if (ts < tStop) tStop = ts;
+            }
           }
         }
       }
 
-      // ----- mountains: one vertical strip of smooth terrain at depth t, top height S, slope (gx,gy) -----
-      function terrainStrip(c, t, wx, wy, S, gx, gy) {
-        if (t < 0.02) t = 0.02;
-        const yt = horizon - ((S - eyeH) * K) / t;
+      // Colour of the ground at one spot. Sg = ground height there, zr = height of the sight line (matters on cliffs),
+      // (gx,gy) = slope, dd = distance.
+      function paintTerrain(i, wx, wy, Sg, zr, gx, gy, dd) {
+        const sl2 = gx * gx + gy * gy,
+          sl = Math.sqrt(sl2);
+        let nl = (LZ - gx * LX - gy * LY) / Math.sqrt(1 + sl2);
+        if (nl < 0) nl = 0;
+        let k = (0.6 + 0.6 * nl) / (0.6 + 0.6 * LZ); // 1 on flat ground, brighter facing the light, darker facing away
+        if (k > 1.5) k = 1.5;
+        const near = dd < 60;
+        const patch = vnoise(wx * 0.12, wy * 0.12, 4);
+        const nA = vnoise(wx * 0.5 + zr * 0.15, wy * 0.5 - zr * 0.12, 14);
+        const amp = 1 / (1 + dd * 0.1);
+        let mid = 0.5,
+          fine = 0.5;
+        if (near) {
+          mid = vnoise(wx * 0.8, wy * 0.8, 5);
+          fine = hash(Math.floor(wx * 5), Math.floor(wy * 5), 3);
+        }
+        // grass: plain, all green, soft patches of lighter and darker green
+        let R = 62 + patch * 20 + (mid - 0.5) * 16 * amp + (fine - 0.5) * 10 * amp,
+          G = 134 + patch * 32 + (mid - 0.5) * 26 * amp + (fine - 0.5) * 18 * amp,
+          B = 48 + patch * 8 + (mid - 0.5) * 8 * amp + (fine - 0.5) * 6 * amp;
+        let chr = " ",
+          bk = 1;
+        // forest: darker ground under the trees (and, far away where single trees cannot be seen, a leafy canopy)
+        if (Sg < 0.5 * H_TOP) {
+          const fT = fbm(wx * 0.07, wy * 0.07, 23, 3);
+          const fl = smoothstep(0.46, 0.64, fT) * (1 - smoothstep(0.28 * H_TOP, 0.5 * H_TOP, Sg));
+          if (fl > 0.01) {
+            if (near) {
+              const m = 1 - 0.28 * fl;
+              R *= m;
+              G *= m;
+              B *= m;
+            } else {
+              const spk = 0.8 + 0.4 * hash(Math.floor(wx * 0.9), Math.floor(wy * 0.9), 7);
+              R = lerp(R, 30 * spk, fl * 0.8);
+              G = lerp(G, 72 * spk, fl * 0.8);
+              B = lerp(B, 38 * spk, fl * 0.8);
+            }
+          }
+        }
+        // higher up the grass turns to dry alpine meadow
+        const al = smoothstep(0.3 * H_TOP, 0.62 * H_TOP, Sg + (patch - 0.5) * 10);
+        if (al > 0) {
+          R = lerp(R, 128 + patch * 34, al * 0.85);
+          G = lerp(G, 134 + patch * 18, al * 0.85);
+          B = lerp(B, 66 + patch * 10, al * 0.85);
+        }
+        // the summit: a soft green-gold meadow
+        const rc = Math.hypot(wx - CX, wy - CY);
+        const sm = (1 - smoothstep(R_END + 3, R_END + 14, rc)) * (1 - smoothstep(0.35, 0.8, sl));
+        if (sm > 0) {
+          R = lerp(R, 118 + patch * 34 + (fine - 0.5) * 10, sm);
+          G = lerp(G, 150 + patch * 26 + (fine - 0.5) * 12, sm);
+          B = lerp(B, 62 + patch * 10, sm);
+        }
+        // bare rock on steep ground (and a few outcrops higher up)
+        let rk = smoothstep(0.55, 1.0, sl + (nA - 0.5) * 0.45);
+        rk *= 1 - 0.55 * smoothstep(0.55, 0.75, vnoise(wx * 0.18, wy * 0.18, 71)); // patches of alpine grass between the rocks
+        rk = Math.max(rk, 0.7 * smoothstep(0.7, 0.85, nA) * smoothstep(0.3, 0.9, sl));
+        rk *= smoothstep(22, 70, Sg); // the lower flanks are covered in plants: bare rock only higher up
+        let f0 = -1;
+        if (rk > 0.01) {
+          const ua = wx * 0.4,
+            va = wy * 0.4;
+          f0 = rn(ua, va, 16);
+          let rR, rG, rB;
+          if (near || dd < 170) {
+            const f1 = rn(ua + LX * 0.2, va + LY * 0.2, 16);
+            const face = clamp(1 - (f1 - f0) * 1.6, 0.8, 1.2);
+            const nC = vnoise(wx * 1.3, zr * 1.2 + wy * 0.3, 17);
+            const nD = vnoise(wx * 0.8 + zr * 0.35, zr * 1.7 + wy * 0.5, 18);
+            const zq = (zr * 5) | 0;
+            const nB = hash(((wx * 7) | 0) + zq * 131, ((wy * 7) | 0) + zq * 7, 15);
+            const band = (0.96 + 0.04 * Math.sin(zr * 6.5 + nA * 6)) * (0.84 + 0.3 * nC);
+            const tone = vnoise(wx * 0.06, wy * 0.06, 72); // warm brown in places, cooler grey in others
+            rR = (100 + 38 * nA - 24 * f0 + 16 * tone) * band;
+            rG = (92 + 34 * nA - 22 * f0 + 2 * tone) * band;
+            rB = (88 + 38 * nA - 18 * f0 - 14 * tone) * band;
+            if (nB < 0.12) {
+              rR *= 0.78;
+              rG *= 0.78;
+              rB *= 0.82;
+            }
+            const rkK = face * (0.8 + 0.4 * nD);
+            rR *= rkK;
+            rG *= rkK;
+            rB *= rkK;
+            if (near && rk > 0.55) {
+              chr = nB < 0.2 ? "░" : nB < 0.46 ? "▒" : nB < 0.8 ? "▓" : "█";
+              bk = 0.72;
+            }
+          } else {
+            rR = 108 + 30 * nA - 22 * f0;
+            rG = 96 + 28 * nA - 20 * f0;
+            rB = 88 + 30 * nA - 16 * f0;
+          }
+          R = lerp(R, rR, rk);
+          G = lerp(G, rG, rk);
+          B = lerp(B, rB, rk);
+        }
+        // sand along the water
+        if (Sg < 1.3) {
+          const wl = Sg - WL;
+          let sa = 1 - smoothstep(0.12, 0.8, wl + (vnoise(wx * 1.3, wy * 1.3, 50) - 0.5) * 0.35);
+          sa *= 1 - smoothstep(0.25, 0.6, sl);
+          if (sa > 0.001) {
+            const sv = vnoise(wx * 0.15, wy * 0.15, 18),
+              sv2 = vnoise(wx * 0.7, wy * 0.7, 19);
+            const wet = 1 - smoothstep(0.0, 0.4, wl); // damp ground right at the waterline
+            const m = (1 - 0.18 * wet) * (0.97 + 0.06 * sv2);
+            R = lerp(R, (216 + sv * 18) * m, sa);
+            G = lerp(G, (198 + sv * 16) * m, sa);
+            B = lerp(B, (146 + sv * 14) * m, sa);
+            if (sa > 0.5) {
+              chr = " ";
+              bk = 1;
+            }
+          }
+        }
+        // snow only on the far ranges that ring the valley
+        if (Sg > 66) {
+          const outer = smoothstep(140, 170, rc); // only the ranges around the valley, never the mountain you climb
+          if (outer > 0) {
+            if (f0 < 0) f0 = rn(wx * 0.4, wy * 0.4, 16);
+            const snowLine = 84 + nA * 8 - f0 * 6;
+            const sn =
+              smoothstep(snowLine - 3, snowLine + 5, Sg + (nA - 0.5) * 3) * (1 - smoothstep(1.4, 2.4, sl)) * outer;
+            if (sn > 0) {
+              R = lerp(R, 232, sn);
+              G = lerp(G, 236, sn);
+              B = lerp(B, 242, sn);
+              if (sn > 0.5) {
+                chr = " ";
+                bk = 1;
+              }
+            }
+          }
+        }
+        // the trail: warm packed earth with soft edges
+        if (dd < 150) {
+          const td = sampC(trailD, wx, wy);
+          if (td < 2.6) {
+            const pm = 1 - smoothstep(0.8, 1.7, td + (vnoise(wx * 1.1, wy * 1.1, 60) - 0.5) * 0.5);
+            if (pm > 0) {
+              const pv = vnoise(wx * 0.9, wy * 0.9, 61);
+              const fl2 = near ? hash(Math.floor(wx * 6), Math.floor(wy * 6), 62) : 0.5;
+              const dk = fl2 < 0.1 ? 0.88 : 1;
+              R = lerp(R, (168 + pv * 22) * dk, pm);
+              G = lerp(G, (140 + pv * 18) * dk, pm);
+              B = lerp(B, (98 + pv * 14) * dk, pm);
+              if (pm > 0.5) {
+                chr = " ";
+                bk = 1;
+              }
+            }
+          }
+        }
+        R *= k;
+        G *= k;
+        B = B * k + (k < 1 ? (1 - k) * 18 : 0); // shadows lean a little blue
+        // clear mountain air: far ground is hazed less than the plain fog would
+        const ddf = dd < 40 ? dd : 40 + (dd - 40) * 0.38;
+        put(i, chr, R, G, B, R * bk, G * bk, B * bk, ddf);
+      }
+
+      // The top of a cloud layer seen from above: soft white billows, golden near sunset.
+      function paintCloud(i, wx, wy, C, dd, vx, vy) {
+        const n1 = vnoise(wx * 0.09 + worldTime * 0.01, wy * 0.09, 94),
+          n2 = vnoise(wx * 0.35, wy * 0.35, 95);
+        const lum = clamp(0.8 + 0.5 * (n1 - 0.5) + 0.3 * (n2 - 0.5) + (C - CLT) * 0.05, 0.55, 1.12);
+        const vl = Math.sqrt(vx * vx + vy * vy) + 1e-6;
+        const toSun = 0.5 + 0.5 * ((vx * LX + vy * LY) / (vl * Math.sqrt(LX * LX + LY * LY) + 1e-6)); // looking toward the sun
+        const gl = dusk * (0.35 + 0.65 * toSun) * 0.85;
+        let R = lerp(244, 255, gl) * lum,
+          G = lerp(246, 176, gl) * lum,
+          B = lerp(252, 138, gl) * lum;
+        const chr = n2 < 0.3 ? "░" : n2 < 0.5 ? "▒" : " ";
+        put(i, chr, R * 1.05, G * 1.05, B * 1.05, R * 0.94, G * 0.94, B * 0.95, dd);
+      }
+
+      // One ground sample at depth t along this column's ray: paint every still-empty row it covers.
+      function stripAt(t) {
+        const wx = px + gRdx * t,
+          wy = py + gRdy * t;
+        const S = Hs(wx, wy);
+        let top = S,
+          kind = 0; // 0 land, 1 water, 2 cloud
+        if (S < WL) {
+          top = WL;
+          kind = 1;
+        }
+        if (cloudOn) {
+          const C = cloudAt(wx, wy);
+          if (C > top) {
+            top = C;
+            kind = 2;
+          }
+        }
+        const yt = rowOf(t, top);
         let r0 = Math.ceil(yt - 0.5);
         if (r0 < 0) r0 = 0;
-        if (r0 >= occTop) return;
-        const yb = horizon + (eyeH * K) / t;
-        let r1 = Math.ceil(yb - 0.5);
-        if (r1 > rows) r1 = rows;
-        if (r0 >= r1) return;
-        const sl = Math.sqrt(gx * gx + gy * gy);
-        let nl = (LZ - gx * LX - gy * LY) / Math.sqrt(1 + sl * sl);
-        if (nl < 0) nl = 0;
-        const sh = 0.36 + 0.8 * nl; // sunlit slopes bright, slopes facing away dark
-        const far = t > 70;
-        for (let r = r0; r < r1; r++) {
+        if (r0 >= occTop) {
+          prevT = t;
+          prevS = top;
+          return;
+        }
+        let gx = 0,
+          gy = 0;
+        if (kind === 0) {
+          const e = 0.4 + t * 0.012;
+          gx = (Hs(wx + e, wy) - Hs(wx - e, wy)) / (2 * e);
+          gy = (Hs(wx, wy + e) - Hs(wx, wy - e)) / (2 * e);
+        }
+        const tp = prevT,
+          sp0 = prevS;
+        for (let r = r0; r < occTop; r++) {
           if (filled[r]) continue;
           filled[r] = 1;
           nFilled++;
-          let z = eyeH - ((r + 0.5 - horizon) * t) / K; // height of this row on the mountain
-          if (z < 0) z = 0;
-          const i = r * cols + c;
-          const zq = (z * 4) | 0;
-          const nA = vnoise(wx * 0.6 + z * 0.2, wy * 0.6 + z * 0.5, 14);
-          const nB = hash(((wx * 6) | 0) + zq * 131, ((wy * 6) | 0) + zq * 7, 15);
-          // rock: brown to grey, with layers and cracks
-          let R = 108 + 38 * nA,
-            G = 94 + 44 * nA,
-            B = 82 + 62 * nA;
-          const str = 0.9 + 0.1 * Math.sin(z * 3.3 + nA * 7);
-          R *= str;
-          G *= str;
-          B *= str;
-          if (nB < 0.1) {
-            R *= 0.74;
-            G *= 0.74;
-            B *= 0.78;
-          }
-          // forest at the foot of the mountain
-          const treeLine = 2.0 + nA * 1.4;
-          const fo = 1 - smoothstep(treeLine - 0.5, treeLine, z);
-          if (fo > 0) {
-            R = lerp(R, 38 + nB * 22, fo);
-            G = lerp(G, 82 + nB * 34, fo);
-            B = lerp(B, 36 + nB * 14, fo);
-          }
-          // snow: high up, and not on very steep rock
-          const snowLine = 4.2 + nA * 1.4;
-          const sa =
-            smoothstep(snowLine - 0.4, snowLine + 0.5, z + (nB - 0.5) * 0.35) *
-            (1 - smoothstep(2.4, 4.6, sl));
-          if (sa > 0) {
-            R = lerp(R, 240, sa);
-            G = lerp(G, 244, sa);
-            B = lerp(B, 252, sa);
-          }
-          R *= sh;
-          G *= sh;
-          B = B * sh + (sh < 1 ? (1 - sh) * 26 : 0); // shadows lean a little blue
-          let chr, bk;
-          if (far) {
-            chr = "█";
-            bk = 1;
+          const s = sRow[r];
+          // where does this row's sight line meet the ground, between the previous sample and this one?
+          let tr;
+          const dp = EB + s * tp - sp0,
+            dn = EB + s * t - top;
+          let f = dp / (dp - dn);
+          if (!(f >= 0)) f = 0;
+          else if (f > 1) f = 1;
+          tr = tp + (t - tp) * f;
+          if (kind === 1 && s < -1e-6) tr = (WL - EB) / s; // flat water: exact
+          const wxr = px + gRdx * tr,
+            wyr = py + gRdy * tr;
+          const zr = EB + s * tr;
+          const i = r * cols + gCol;
+          zb[i] = tr;
+          const dd = tr * gRl;
+          if (kind === 2) {
+            const hxw = Frow[r] * gDirX - gLat * gDirY,
+              hyw = Frow[r] * gDirY + gLat * gDirX;
+            paintCloud(i, wxr, wyr, top, dd, hxw, hyw);
           } else {
-            chr = nB < 0.2 ? "░" : nB < 0.46 ? "▒" : nB < 0.8 ? "▓" : "█";
-            bk = sa > 0.5 ? 0.86 : 0.68;
+            const Sr = Hs(wxr, wyr); // the ground height at this very spot (on a cliff the sight line is above it)
+            if (kind === 1 && Sr < WL) {
+              const hxw = Frow[r] * gDirX - gLat * gDirY,
+                hyw = Frow[r] * gDirY + gLat * gDirX;
+              drawWater(i, wxr, wyr, dd, hxw, hyw, Urow[r], WL - Sr);
+            } else paintTerrain(i, wxr, wyr, Sr, zr, gx, gy, dd);
           }
-          put(i, chr, R, G, B, R * bk, G * bk, B * bk, t);
         }
-        markOpaque(r0);
-      }
-
-      // A ray crossing one mountain tile: sample the smooth surface a few times along the way.
-      function mountainTile(c, tIn, tOut, rdx, rdy) {
-        const dt = tOut - tIn;
-        let n = Math.ceil(dt / (0.07 + 0.012 * tIn));
-        if (n < 1) n = 1;
-        else if (n > 12) n = 12;
-        for (let k = 1; k <= n; k++) {
-          if (occTop <= 0) return;
-          const t = tIn + (dt * k) / n;
-          const wx = px + rdx * t,
-            wy = py + rdy * t;
-          const b0 = baseH(wx, wy);
-          if (b0 < 0.003) continue;
-          let S = b0 * mtnDetail(wx, wy);
-          if (S > 16) S = 16;
-          const yt = horizon - ((S - eyeH) * K) / t;
-          if (Math.ceil(yt - 0.5) >= occTop) continue; // completely hidden behind something nearer
-          const e = 0.45;
-          const gx = (baseH(wx + e, wy) - baseH(wx - e, wy)) / (2 * e);
-          const gy = (baseH(wx, wy + e) - baseH(wx, wy - e)) / (2 * e);
-          terrainStrip(c, t, wx, wy, S, gx, gy);
-        }
-      }
-
-      // ----- ruins: stone wall strips -----
-      function stoneStrip(c, t, h, side, u, tx, ty) {
-        if (t < 0.02) t = 0.02;
-        const yt = horizon - ((h - eyeH) * K) / t;
-        const yb = horizon + (eyeH * K) / t;
-        const r0 = Math.max(0, Math.ceil(yt - 0.5)),
-          r1 = Math.min(rows, Math.ceil(yb - 0.5));
-        if (r0 >= r1 || r0 >= occTop) return;
-        const sm = side ? 0.72 : 1;
-        for (let r = r0; r < r1; r++) {
-          if (filled[r]) continue;
-          filled[r] = 1;
-          nFilled++;
-          let z = eyeH - ((r + 0.5 - horizon) * t) / K;
-          if (z < 0) z = 0;
-          const i = r * cols + c;
-          const row = Math.floor(z * 2.5);
-          const hh = hash(tx * 3 + row, ty * 5 + ((u * 3) | 0), 12);
-          const mortar = z * 2.5 - row < 0.14 || (u * 3 + 0.5 * (row & 1)) % 1 < 0.09;
-          let R = 156 * (0.88 + 0.2 * hh),
-            G = 150 * (0.88 + 0.2 * hh),
-            B = 142 * (0.88 + 0.2 * hh);
-          if (z < 0.7 && hh > 0.5) {
-            R = 110;
-            G = 140;
-            B = 90;
-          } // moss
-          let chr;
-          if (mortar) {
-            R *= 0.55;
-            G *= 0.55;
-            B *= 0.55;
-            chr = "█";
-          } else chr = hh < 0.5 ? "▓" : "▒";
-          put(i, chr, R * sm, G * sm, B * sm, R * sm * 0.45, G * sm * 0.45, B * sm * 0.45, t);
-        }
+        prevT = t;
+        prevS = top;
         markOpaque(r0);
       }
 
@@ -868,7 +1398,7 @@
         hNZ = new Float64Array(12);
 
       // Distance along the ray (in the same units as the wall distance) to the first hit on shape b, or -1.
-      // The ray for one text row is: horizontal point = (px,py) + (rdx,rdy)*t, height = eyeH + s*t.
+      // The ray for one text row is: horizontal point = (px,py) + (rdx,rdy)*t, height = eh + s*t.
       function hitPart(b, j, rdx, rdy, s, A) {
         const ox = px - PP[b + 1],
           oy = py - PP[b + 2];
@@ -881,7 +1411,7 @@
             a = PP[b + 5];
           const ia = 1 / (a * a),
             ib = 1 / (bb * bb),
-            e0 = eyeH - zc;
+            e0 = eh - zc;
           const qa = A * ia + s * s * ib;
           const qb = Bq * ia + 2 * e0 * s * ib;
           const qc = Cq * ia + e0 * e0 * ib - 1;
@@ -889,7 +1419,7 @@
           if (disc <= 0) return -1;
           const t = (-qb - Math.sqrt(disc)) / (2 * qa);
           if (t <= 0.02) return -1;
-          const z = eyeH + s * t;
+          const z = eh + s * t;
           if (z < 0) return -1; // that part is under the ground
           const nx = (ox + rdx * t) * ia,
             ny = (oy + rdy * t) * ia,
@@ -906,7 +1436,7 @@
           R0 = PP[b + 5],
           R1 = PP[b + 6];
         const k = (R1 - R0) / (z1 - z0);
-        const m = R0 + k * (eyeH - z0),
+        const m = R0 + k * (eh - z0),
           n = k * s; // radius at distance t is m + n*t
         const al = A - n * n,
           be = Bq - 2 * m * n,
@@ -926,24 +1456,24 @@
               t2 = tmp;
             }
             if (t1 > 0.02) {
-              const z = eyeH + s * t1;
+              const z = eh + s * t1;
               if (z >= z0 && z <= z1 && m + n * t1 >= 0) best = t1;
             }
             if (best === 1e30 && t2 > 0.02) {
-              const z = eyeH + s * t2;
+              const z = eh + s * t2;
               if (z >= z0 && z <= z1 && m + n * t2 >= 0) best = t2;
             }
           }
         } else if (be > 1e-12 || be < -1e-12) {
           const t1 = -ga / be;
           if (t1 > 0.02) {
-            const z = eyeH + s * t1;
+            const z = eh + s * t1;
             if (z >= z0 && z <= z1 && m + n * t1 >= 0) best = t1;
           }
         }
         if (s > 1e-9 || s < -1e-9) {
           // flat bottom / top faces
-          let tc = (z0 - eyeH) / s;
+          let tc = (z0 - eh) / s;
           if (tc > 0.02 && tc < best) {
             const hx = ox + rdx * tc,
               hy = oy + rdy * tc;
@@ -952,7 +1482,7 @@
               kindHit = 1;
             }
           }
-          tc = (z1 - eyeH) / s;
+          tc = (z1 - eh) / s;
           if (tc > 0.02 && tc < best) {
             const hx = ox + rdx * tc,
               hy = oy + rdy * tc;
@@ -999,7 +1529,7 @@
           aux = PP[b + 8];
         const wx = px + rdx * t,
           wy = py + rdy * t,
-          z = eyeH + s * t;
+          z = eh + s * t;
         const nx = hNX[j],
           ny = hNY[j],
           nz = hNZ[j];
@@ -1016,6 +1546,17 @@
             G = (42 + 30 * st + 16 * st2) * sh,
             B = (24 + 18 * st + 10 * st2) * sh;
           put(i, st2 < 0.3 ? "▓" : "█", R, G, B, R * 0.7, G * 0.7, B * 0.7, t);
+          return true;
+        }
+        if (mat === 7) {
+          // stone: grey, in layers, with a few darker stones
+          const lay = Math.floor((z * 8 + aux * 3) * 1.0);
+          const st = hash(Math.floor(Math.atan2(wy - PP[b + 2], wx - PP[b + 1]) * 3), lay, 54);
+          const sh = 0.5 + 0.62 * nl;
+          const R = (118 + 40 * st) * sh,
+            G = (114 + 34 * st) * sh,
+            B = (106 + 30 * st) * sh;
+          put(i, st < 0.3 ? "▒" : "▓", R, G, B, R * 0.8, G * 0.8, B * 0.8, t);
           return true;
         }
         // leaves: ragged outline (gaps where we look along the surface)
@@ -1083,18 +1624,20 @@
         const tf = tc + hw;
         if (tf <= 0.02) return;
         if (tn < 0.02) tn = 0.02;
-        const H = hgt[idx];
-        let rTop = Math.floor(horizon - ((H - eyeH) * K) / (H > eyeH ? tn : tf));
-        let rBot = Math.ceil(horizon + (eyeH * K) / tn);
+        const G = tileG[idx];
+        eh = EB - G; // from here on heights are measured from the ground this tree stands on
+        const H = hgt[idx] + G;
+        let rTop = Math.floor(Math.min(rowOf(tn, H), rowOf(tf, H)));
+        let rBot = Math.ceil(Math.max(rowOf(tn, G - 0.3), rowOf(tf, G - 0.3)));
         if (rTop < 0) rTop = 0;
         if (rBot > rows - 1) rBot = rows - 1;
         if (rBot > occTop - 1) rBot = occTop - 1;
         if (rTop > rBot) return;
         for (let r = rTop; r <= rBot; r++) {
           if (filled[r]) continue;
-          const s = -(r + 0.5 - horizon) / K;
-          const za = eyeH + s * tn,
-            zb = eyeH + s * tf;
+          const s = sRow[r];
+          const za = eh + s * tn,
+            zb = eh + s * tf;
           const zlo = za < zb ? za : zb,
             zhi = za < zb ? zb : za;
           if (zhi < 0) continue;
@@ -1123,6 +1666,7 @@
             if (paintPart(r * cols + c, off + best * PSTRIDE, best, bt, rdx, rdy, s, A)) {
               filled[r] = 1;
               nFilled++;
+              zb[r * cols + c] = bt;
               break;
             }
             excl |= 1 << best; // a gap in the leaves: look through it at whatever is behind
@@ -1130,24 +1674,259 @@
         }
       }
 
-      // Ray against a small slab is no longer needed: trees are real 3D shapes now.
+      // ----- water: rippling waves, shallow-to-deep colour, sky reflection, sun glitter, shore foam -----
+      const WAVES = [
+        [1.3, 0.7, 1.1, 0.055],
+        [-0.9, 1.6, 1.4, 0.045],
+        [2.7, -1.8, 1.9, 0.03],
+        [-3.3, -2.5, 2.4, 0.022],
+      ];
+      // (vx,vy,vz) = direction we are looking along, wf = the water field value (0.5 is the shore).
+      function drawWater(i, wx, wy, dist, vx, vy, vz, depthW) {
+        const t = worldTime;
+        const damp = 1 / (1 + dist * dist * 0.006); // waves flatten quickly with distance: no stripe aliasing
+        const warp = vnoise(wx * 0.25, wy * 0.25, 9) * 5;
+        let gx = 0,
+          gy = 0,
+          hw = 0;
+        for (let k = 0; k < 4; k++) {
+          const w = WAVES[k];
+          const ph = w[0] * wx + w[1] * wy + w[2] * t + warp * (0.4 + 0.3 * k);
+          const cc = Math.cos(ph) * w[3];
+          gx += cc * w[0];
+          gy += cc * w[1];
+          hw += Math.sin(ph) * w[3];
+        }
+        // choppy, non-directional ripples (these break up the long straight bands)
+        const cd = 1 / (1 + dist * dist * 0.0025);
+        const rpx = vnoise(wx * 2.3 + t * 0.35, wy * 2.3, 40) + vnoise(wx * 5.1, wy * 5.1 - t * 0.5, 42) * 0.5 - 0.75;
+        const rpy = vnoise(wx * 2.3, wy * 2.3 + t * 0.3, 41) + vnoise(wx * 5.1 + t * 0.5, wy * 5.1, 43) * 0.5 - 0.75;
+        gx = gx * damp + rpx * 0.16 * cd;
+        gy = gy * damp + rpy * 0.16 * cd;
+        hw = hw * damp + (rpx + rpy) * 0.025 * cd;
+        const crest = hw / 0.152; // -1 .. 1
+        // surface normal and the way we look at it
+        const nn = 1 / Math.sqrt(1 + gx * gx + gy * gy);
+        const nx = -gx * nn,
+          ny = -gy * nn,
+          nz = nn;
+        const vl = 1 / Math.sqrt(vx * vx + vy * vy + vz * vz);
+        const dx = vx * vl,
+          dy = vy * vl,
+          dz = vz * vl;
+        let cosT = -(dx * nx + dy * ny + dz * nz);
+        if (cosT < 0.02) cosT = 0.02;
+        else if (cosT > 1) cosT = 1;
+        const omc = 1 - cosT;
+        let fres = 0.03 + 0.95 * omc * omc * omc * omc; // grazing angles mirror the sky
+        if (fres > 0.5) fres = 0.5; // a lake only half-mirrors the sky
+        // reflected ray -> sky colour
+        const rx = dx + 2 * cosT * nx,
+          ry = dy + 2 * cosT * ny,
+          rz = dz + 2 * cosT * nz;
+        const rh = Math.sqrt(rx * rx + ry * ry) + 1e-6;
+        const ter = rz / rh;
+        const ke = ter > 0 ? (Math.min(1, Math.pow(ter / 0.95, 0.6)) * 255) | 0 : 0;
+        let reR = skyR[ke],
+          reG = skyG[ke],
+          reB = skyB[ke];
+        // clouds mirrored in the surface
+        if (ter > 0.03) {
+          const inv = 2.4 / rz;
+          const cu = (rx * inv) / 1 + t * 0.05,
+            cvv = ry * inv;
+          const cn = 0.65 * vnoise(cu, cvv, 5) + 0.35 * vnoise(cu * 2.3, cvv * 2.3, 6);
+          const cval = cn - 0.595 + (1 - smoothstep(0.03, 0.24, ter)) * 0.35;
+          if (cval > 0) {
+            const ck = Math.min(0.45, cval * 1.4);
+            reR = lerp(reR, lerp(48, 252, dayAmt), ck);
+            reG = lerp(reG, lerp(54, 252, dayAmt), ck);
+            reB = lerp(reB, lerp(84, 255, dayAmt), ck);
+          }
+        }
+        // sun / moon glitter
+        let spec = 0;
+        const sdot = rx * LX + ry * LY + rz * LZ;
+        if (sdot > 0.7) {
+          spec = Math.pow(sdot, 100) * 1.4 + Math.pow(sdot, 14) * 0.18;
+        }
+        const lightI = sunEl > 0 ? Math.max(0.15, dayAmt) : 0.5 * nightF;
+        const sunC = sunEl > 0 ? [255, 236, 180] : [210, 225, 255];
+        // colour of the water body, like a lake: light clear turquoise close by (and near the shore),
+        // getting steadily darker and deeper blue the further away you look
+        const dn = vnoise(wx * 0.15, wy * 0.15, 36) - 0.5;
+        const depShore = smoothstep(0.0, 2.4, depthW + dn * 0.8);
+        const depView = smoothstep(1.5, 38, dist);
+        const dep = clamp(depShore * 0.55 + depView * 0.75, 0, 1);
+        const bm = 0.94 + 0.12 * (0.5 + 0.5 * clamp(crest, -1, 1));
+        const bodyR = lerp(112, 10, dep) * bm * LR,
+          bodyG = lerp(204, 58, dep) * bm * LG,
+          bodyB = lerp(194, 104, dep) * bm * LB;
+        let cr = bodyR * (1 - fres) + reR * fres + spec * sunC[0] * lightI,
+          cg = bodyG * (1 - fres) + reG * fres + spec * sunC[1] * lightI,
+          cb = bodyB * (1 - fres) + reB * fres + spec * sunC[2] * lightI;
+        // foam washing in and out along the shore
+        const e2 = depthW * 1.8;
+        const fw = 0.13 + 0.1 * Math.sin(t * 1.5 + wx * 0.9 + wy * 0.6);
+        const foam = 1 - smoothstep(fw * 0.35, fw + 0.1, e2 + (vnoise(wx * 3, wy * 3, 37) - 0.5) * 0.12);
+        let foR = 240 * LR,
+          foG = 246 * LG,
+          foB = 250 * LB;
+        if (foam > 0) {
+          cr = lerp(cr, foR, foam * 0.85);
+          cg = lerp(cg, foG, foam * 0.85);
+          cb = lerp(cb, foB, foam * 0.85);
+        }
+        // which text character (if any) goes on top
+        let chr = " ",
+          fr = cr,
+          fg = cg,
+          fb = cb;
+        const far = clamp(dist / 48, 0, 1);
+        if (foam > 0.5) {
+          chr = foam > 0.8 ? "▓" : "▒";
+          fr = foR;
+          fg = foG;
+          fb = foB;
+          cr *= 0.92;
+          cg *= 0.92;
+          cb *= 0.92;
+        } else if (spec > 0.3) {
+          chr = "≈";
+          fr = 255;
+          fg = 250;
+          fb = 225;
+        }
+        putRaw(i, chr, fr, fg, fb, cr, cg, cb, dist);
+      }
 
-      const GRASS_SHADE_TREE = 0.58;
+
+      // ----- the person waiting at the top: a flat figure that always faces you -----
+      const NPC_H = 0.62; // height in tiles
+      // What is at this spot of the figure? ux sideways (in body heights), v height 0 (feet) .. 1 (head).
+      // 0 nothing, 1 skin, 2 jacket, 3 trousers, 4 backpack, 5 hat
+      function npcPix(ux, v, ph, dirSign) {
+        const ax = Math.abs(ux);
+        if (v > 0.86) {
+          const hu = ux / 0.068,
+            hv = (v - 0.927) / 0.075;
+          if (v > 0.945 && ax < 0.1) return 5; // hat with a brim
+          if (hu * hu + hv * hv < 1) return v > 0.965 ? 5 : 1;
+          return 0;
+        }
+        if (v > 0.5) {
+          const half = 0.105 + 0.035 * ((v - 0.5) / 0.36);
+          if (ax < half) return 2;
+          if (v > 0.52 && v < 0.82 && ux * dirSign > 0 && ax < half + 0.055 && ax >= half - 0.02) return 4; // backpack
+          // arms swing a little
+          const sw = Math.sin(ph) * 0.03 * (v - 0.5);
+          if (ax >= half && ax < half + 0.04 && v < 0.82) return v < 0.58 ? 1 : 2;
+          if (sw > 99) return 0;
+          return 0;
+        }
+        // legs
+        const sw = Math.sin(ph) * 0.05 * (1 - v / 0.5);
+        const l1 = Math.abs(ux - 0.04 - sw),
+          l2 = Math.abs(ux + 0.04 + sw);
+        if (l1 < 0.036 || l2 < 0.036) return v < 0.07 ? 5 : 3; // boots (dark) at the bottom
+        return 0;
+      }
+      const NPC_COL = [null, [226, 176, 140], [206, 82, 50], [48, 58, 82], [92, 70, 48], [64, 46, 34]];
+
+      function drawNPC(dirX, dirY) {
+        if (!NPC.visible) return;
+        const dx = NPC.x - px,
+          dy = NPC.y - py,
+          dzF = NPC.z - EB;
+        const fw = dx * dirX + dy * dirY,
+          rt = -dx * dirY + dy * dirX;
+        const Ff = fw * cp + dzF * sp,
+          Fh = fw * cp + (dzF + NPC_H) * sp;
+        const Fm = (Ff + Fh) * 0.5;
+        if (Fm < 0.3 || fw < 0.3) return;
+        const Uf = dzF * cp - fw * sp,
+          Uh = (dzF + NPC_H) * cp - fw * sp;
+        if (Ff < 0.05 || Fh < 0.05) return;
+        const yFeet = yc - (Uf / Ff) * K,
+          yHead = yc - (Uh / Fh) * K;
+        const hr = yFeet - yHead;
+        if (hr < 1.2) return;
+        const sx = (cols * cellW) / 2 + (rt / Fm) * pxPerUnit;
+        const halfPx = (0.34 * NPC_H * pxPerUnit) / Fm;
+        const c0 = Math.max(0, Math.floor((sx - halfPx) / cellW)),
+          c1 = Math.min(cols - 1, Math.ceil((sx + halfPx) / cellW));
+        const r0 = Math.max(0, Math.floor(yHead)),
+          r1 = Math.min(rows - 1, Math.ceil(yFeet));
+        const ph = NPC.phase;
+        for (let r = r0; r <= r1; r++) {
+          const v = (yFeet - (r + 0.5)) / hr;
+          if (v < 0 || v > 1) continue;
+          for (let c = c0; c <= c1; c++) {
+            const i = r * cols + c;
+            if (zb[i] < fw) continue; // something is in front of her
+            const ux = ((((c + 0.5) * cellW - sx) / pxPerUnit) * Fm) / NPC_H;
+            const m = npcPix(ux, v, ph, NPC.face);
+            if (m === 0) continue;
+            const col = NPC_COL[m];
+            // lit from the light's side, a touch darker on the far side
+            const side = clamp(0.5 + 0.5 * ((rt > 0 ? -1 : 1) * ux * 2), 0, 1);
+            const sh = 0.78 + 0.34 * side;
+            const R = col[0] * sh,
+              G = col[1] * sh,
+              B = col[2] * sh;
+            put(i, "█", R, G, B, R, G, B, fw);
+          }
+        }
+      }
 
       function render() {
         const dirX = Math.cos(angle),
           dirY = Math.sin(angle);
         const plX = -dirY * P,
           plY = dirX * P; // camera plane (points to the right)
-        horizon = rows * 0.5 + K * Math.tan(pitch) + bob;
+        cp = Math.cos(pitch);
+        sp = Math.sin(pitch);
+        yc = rows * 0.5 + bob;
+        horizon = yc + K * Math.tan(pitch);
         updateSky();
+        // thinner haze the higher you are; thick white mist while you are inside the cloud layer
+        {
+          const alt = clamp(EB / H_TOP, 0, 1);
+          fogK = lerp(0.0078, 0.0034, smoothstep(0, 0.9, alt));
+          cloudOn = EB > CLT + 0.5;
+          const thick = smoothstep(CLT - 24, CLT - 6, cloudAt(px, py));
+          const inCl = smoothstep(CLB - 3, CLB + 1, EB) * (1 - smoothstep(CLT - 1, CLT + 3, EB)) * thick;
+          if (inCl > 0.001) {
+            fogK += 0.07 * inCl;
+            const q = inCl * 0.9;
+            FR = lerp(FR, 214, q);
+            FG = lerp(FG, 220, q);
+            FB = lerp(FB, 232, q);
+            for (let k = 0; k < 256; k++) skyLUT[k] = rgb(lerp(skyR[k], 214, q), lerp(skyG[k], 220, q), lerp(skyB[k], 232, q));
+          }
+        }
+        // For every screen row: the tilted camera's ray (forward F, up U) and the slope the marcher uses.
+        let nInv = 0;
         for (let r = 0; r < rows; r++) {
-          const y = r + 0.5;
-          rowDist[r] = y > horizon ? (eyeH * K) / (y - horizon) : 0;
+          const v = -(r + 0.5 - yc) / K;
+          const F = cp - v * sp,
+            U = sp + v * cp;
+          Frow[r] = F;
+          Urow[r] = U;
+          if (F > 0.02) {
+            sRow[r] = U / F;
+            rowValid[r] = 1;
+            filled0[r] = 0;
+          } else {
+            sRow[r] = U >= 0 ? 1e9 : -1e9;
+            rowValid[r] = 0;
+            filled0[r] = 1;
+            nInv++;
+          }
         }
         celestial(sunAz, sunEl, sunS);
         celestial(moonAz, moonEl, moonS);
-        // light direction for shading mountains and trees
+        // light direction for shading
         {
           const up = sunEl > 0.0;
           const laz = up ? sunAz : moonAz;
@@ -1161,187 +1940,129 @@
         const sunR = 0.07 * pxPerUnit,
           moonR = 0.05 * pxPerUnit,
           haloR = sunR * 2.6;
-        const sunUp = sunEl > 0.02,
-          moonUp = moonEl > 0.02;
-        // cloud colour
         const cR = lerp(48, 252, dayAmt) + dusk * 3,
           cG = lerp(54, 252, dayAmt) - dusk * 70,
           cB = lerp(84, 255, dayAmt) - dusk * 80;
+        const Gp = Hs(px, py);
+        const hazeC = rgb(FR, FG, FB);
 
         for (let c = 0; c < cols; c++) {
-          const camX = (2 * (c + 0.5)) / cols - 1;
-          const rdx = dirX + plX * camX,
-            rdy = dirY + plY * camX;
-          const tanDx = camX * P,
-            cd = 1 / Math.sqrt(1 + tanDx * tanDx);
-          const azC = angle + Math.atan(tanDx);
-          const sunDa = Math.abs(angDiff(azC, sunAz)),
-            moonDa = Math.abs(angDiff(azC, moonAz));
+          const camXs = (2 * (c + 0.5)) / cols - 1; // -1 .. 1 across the screen
+          const lat = camXs * P; // sideways slope of this screen column
+          const camXr = camXs * cp; // tilting the camera squeezes the columns together
+          const rdx = dirX + plX * camXr,
+            rdy = dirY + plY * camXr;
+          gDirX = dirX;
+          gDirY = dirY;
+          gLat = lat;
+          gRdx = rdx;
+          gRdy = rdy;
+          gRl = Math.sqrt(rdx * rdx + rdy * rdy);
+          gCol = c;
 
-          // ---- sky and ground for every row in this column ----
+          // ---- sky (and haze below the horizon) for every row in this column ----
           for (let r = 0; r < rows; r++) {
             const y = r + 0.5,
               i = r * cols + c;
-            if (y <= horizon) {
-              const bgS = skyBg[r];
+            const F = Frow[r],
+              U = Urow[r];
+            zb[i] = 1e9;
+            const hxw = F * dirX - lat * dirY,
+              hyw = F * dirY + lat * dirX;
+            if (U < -0.0008) {
               ch[i] = " ";
-              fgA[i] = bgS;
-              bgA[i] = bgS;
-              const q = (horizon - y) / K,
-                te = q * cd; // te ≈ tan(elevation)
-              const pxc = (c + 0.5) * cellW,
-                pyc = y * cellH;
-              // sun
-              if (sunS.vis) {
-                const dx = pxc - sunS.x,
-                  dy = pyc - sunS.y,
-                  d2 = dx * dx + dy * dy;
-                if (d2 < sunR * sunR) {
-                  ch[i] = d2 > sunR * sunR * 0.62 ? "▓" : "█";
-                  fgA[i] = rgb(255, 238, 150, 0);
-                } else if (dayAmt > 0.15 && d2 < haloR * haloR) {
-                  const k = 0.4 * (1 - Math.sqrt(d2) / haloR) * dayAmt;
-                  ch[i] = "░";
-                  fgA[i] = rgb(
-                    lerp(FR, 255, k),
-                    lerp(FG, 235, k),
-                    lerp(FB, 150, k),
-                  );
+              fgA[i] = hazeC;
+              bgA[i] = hazeC;
+              if (!rowValid[r]) {
+                // looking steeply down and backwards: plain flat ground under / behind you
+                const lam = (EB - Gp) / -U;
+                const wx = px + hxw * lam,
+                  wy = py + hyw * lam;
+                const dd = lam * Math.sqrt(hxw * hxw + hyw * hyw);
+                const Sr = Hs(wx, wy);
+                zb[i] = 0;
+                if (Sr < WL) drawWater(i, wx, wy, dd, hxw, hyw, U, WL - Sr);
+                else paintTerrain(i, wx, wy, Sr, Sr, 0, 0, dd);
+              }
+              continue;
+            }
+            const hl = Math.sqrt(F * F + lat * lat) + 1e-9;
+            const te = U / hl; // tan of the elevation angle
+            const e = te > 0 ? Math.min(1, Math.pow(te / 0.95, 0.6)) : 0;
+            const bgS = skyLUT[(e * 255) | 0];
+            ch[i] = " ";
+            fgA[i] = bgS;
+            bgA[i] = bgS;
+            const pxc = (c + 0.5) * cellW,
+              pyc = y * cellH;
+            // sun
+            if (sunS.vis) {
+              const dx = pxc - sunS.x,
+                dy = pyc - sunS.y,
+                d2 = dx * dx + dy * dy;
+              if (d2 < sunR * sunR) {
+                ch[i] = d2 > sunR * sunR * 0.62 ? "▓" : "█";
+                fgA[i] = rgb(255, 238, 150, 0);
+              } else if (dayAmt > 0.15 && d2 < haloR * haloR) {
+                const k = 0.4 * (1 - Math.sqrt(d2) / haloR) * dayAmt;
+                ch[i] = "░";
+                fgA[i] = rgb(lerp(FR, 255, k), lerp(FG, 235, k), lerp(FB, 150, k));
+              }
+            }
+            // moon (a thick crescent: a disc with a bite taken out of it)
+            if (moonS.vis && nightF > 0.1) {
+              const dx = pxc - moonS.x,
+                dy = pyc - moonS.y;
+              if (dx * dx + dy * dy < moonR * moonR) {
+                const ex = dx - moonR * 0.55,
+                  ey = dy + moonR * 0.15;
+                if (ex * ex + ey * ey > moonR * moonR * 0.85) {
+                  ch[i] = hash((dx / cellW) | 0, (dy / cellH) | 0, 33) < 0.18 ? "▓" : "█";
+                  fgA[i] = rgb(236, 240, 255);
                 }
               }
-              // moon (a thick crescent: a disc with a bite taken out of it)
-              if (moonS.vis && nightF > 0.1) {
-                const dx = pxc - moonS.x,
-                  dy = pyc - moonS.y;
-                if (dx * dx + dy * dy < moonR * moonR) {
-                  const ex = dx - moonR * 0.55,
-                    ey = dy + moonR * 0.15;
-                  if (ex * ex + ey * ey > moonR * moonR * 0.85) {
-                    ch[i] =
-                      hash((dx / cellW) | 0, (dy / cellH) | 0, 33) < 0.18
-                        ? "▓"
-                        : "█";
-                    fgA[i] = rgb(236, 240, 255);
-                  }
+            }
+            // stars
+            if (nightF > 0.04 && ch[i] === " ") {
+              const ring = Math.floor(Math.atan(te) * starBY);
+              const rc = (ring + 0.5) / starBY;
+              const nb = Math.max(1, Math.floor(6.2832 * starBX * Math.cos(rc)));
+              const az = Math.atan2(hyw, hxw);
+              const ai = Math.floor(((az + 3.1416) / 6.2832) * nb);
+              const h = hash(ai, ring, 77);
+              if (h < starP && nightF > hash(ai, ring, 78) * 0.85) {
+                const tw = 0.5 + 0.5 * Math.sin(worldTime * 3 + (h / starP) * 21.6);
+                if (tw > 0.2) {
+                  const h3 = hash(ai, ring, 79);
+                  ch[i] = h3 < 0.55 ? "·" : h3 < 0.8 ? "." : h3 < 0.93 ? "+" : "✦";
+                  const b = 150 + 105 * tw;
+                  fgA[i] = rgb(b, b, 255 - (1 - tw) * 40);
                 }
               }
-              // stars
-              if (nightF > 0.04 && ch[i] === " ") {
-                const ai = Math.floor(azC * starBX),
-                  ei = Math.floor(te * starBY);
-                const h = hash(ai, ei, 77);
-                if (h < starP && nightF > hash(ai, ei, 78) * 0.85) {
-                  const tw = 0.5 + 0.5 * Math.sin(worldTime * 3 + (h / starP) * 21.6);
-                  if (tw > 0.2) {
-                    const h3 = hash(ai, ei, 79);
-                    ch[i] =
-                      h3 < 0.55 ? "·" : h3 < 0.8 ? "." : h3 < 0.93 ? "+" : "✦";
-                    const b = 150 + 105 * tw;
-                    fgA[i] = rgb(b, b, 255 - (1 - tw) * 40);
-                  }
-                }
-              }
-              // clouds (they drift slowly)
-              if (te > 0.02 && te < 1.6) {
-                const u = azC * 2.4 + worldTime * 0.02,
-                  v = te * 3.6;
-                const n =
-                  0.65 * vnoise(u, v, 5) + 0.35 * vnoise(u * 2.3, v * 2.3, 6);
-                const band =
-                  smoothstep(0.02, 0.2, te) * (1 - smoothstep(1.0, 1.6, te));
-                const val = n - 0.595 + (1 - band) * 0.35;
-                if (val > 0) {
-                  ch[i] =
-                    val < 0.05 ? "░" : val < 0.1 ? "▒" : val < 0.16 ? "▓" : "█";
-                  const sh = 0.8 + 0.2 * smoothstep(0.0, 0.25, te);
-                  fgA[i] = rgb(cR * sh, cG * sh, cB * sh);
-                }
-              }
-            } else {
-              // ---- ground (floor casting): where in the world does this text cell look at? ----
-              const dist = rowDist[r];
-              const wx = px + rdx * dist,
-                wy = py + rdy * dist;
-              const tx = Math.floor(wx),
-                ty = Math.floor(wy);
-              const tp = tileAt(tx, ty);
-              if (tp === WATER) {
-                const hh = hash(Math.floor(wx * 2), Math.floor(wy * 2), 41);
-                const ph = Math.sin(
-                  wx * 1.7 + wy * 1.1 + worldTime * 1.6 + hh * 6.28,
-                );
-                const deep = vnoise(wx * 0.2, wy * 0.2, 9);
-                let chr = ph > 0.55 ? "≈" : ph > -0.25 ? "~" : "∼";
-                let fr = 70 + ph * 25,
-                  fg = 135 + ph * 25,
-                  fb = 215;
-                if (dist < 40 && ph < -0.8) chr = " ";
-                // sun / moon glitter on the water
-                if (ph > 0.25 && dist > 2) {
-                  if (sunUp && sunDa < 0.1) {
-                    chr = "≈";
-                    fr = 255;
-                    fg = 235;
-                    fb = 170;
-                  } else if (moonUp && nightF > 0.5 && moonDa < 0.07) {
-                    chr = "≈";
-                    fr = 225;
-                    fg = 232;
-                    fb = 255;
-                  }
-                }
-                put(
-                  i,
-                  dist > 60 ? " " : chr,
-                  fr,
-                  fg,
-                  fb,
-                  22 + deep * 14,
-                  64 + deep * 22,
-                  128 + deep * 20,
-                  dist,
-                );
-              } else if (tp === SAND) {
-                const hh = hash(Math.floor(wx * 4), Math.floor(wy * 4), 17);
-                const sv = vnoise(wx * 0.8, wy * 0.8, 18);
-                const amp = 1 / (1 + dist * 0.1);
-                const R = 214 + sv * 16 + (hh - 0.5) * 12 * amp,
-                  G = 194 + sv * 14 + (hh - 0.5) * 12 * amp,
-                  B = 140 + sv * 12 + (hh - 0.5) * 10 * amp;
-                put(i, " ", R, G, B, R, G, B, dist);
-              } else {
-                // grass: plain, all green. Soft patches of lighter and darker green, no marks.
-                const patch = vnoise(wx * 0.12, wy * 0.12, 4);
-                const mid = vnoise(wx * 0.8, wy * 0.8, 5);
-                const fine = hash(Math.floor(wx * 5), Math.floor(wy * 5), 3);
-                const amp = 1 / (1 + dist * 0.1);
-                let R = 62 + patch * 20 + (mid - 0.5) * 16 * amp + (fine - 0.5) * 10 * amp,
-                  G = 134 + patch * 32 + (mid - 0.5) * 26 * amp + (fine - 0.5) * 18 * amp,
-                  B = 48 + patch * 8 + (mid - 0.5) * 8 * amp + (fine - 0.5) * 6 * amp;
-                if (tp === TREE) {
-                  // shade on the ground under a tree
-                  const d = Math.hypot(wx - tx - 0.5, wy - ty - 0.5);
-                  const m = GRASS_SHADE_TREE + (1 - GRASS_SHADE_TREE) * smoothstep(0.08, 0.5, d);
-                  R *= m;
-                  G *= m;
-                  B *= m;
-                } else if (tp === BUSH) {
-                  const d = Math.hypot(wx - tx - 0.5, wy - ty - 0.5);
-                  const m = 0.78 + 0.22 * smoothstep(0.05, 0.45, d);
-                  R *= m;
-                  G *= m;
-                  B *= m;
-                }
-                put(i, " ", R, G, B, R, G, B, dist);
+            }
+            // clouds: a flat layer high above, seen in perspective (they drift slowly)
+            if (te > 0.03) {
+              const inv = 2.4 / U;
+              const u = hxw * inv + worldTime * 0.05,
+                v = hyw * inv;
+              const n = 0.65 * vnoise(u, v, 5) + 0.35 * vnoise(u * 2.3, v * 2.3, 6);
+              const band = smoothstep(0.03, 0.24, te);
+              const val = n - 0.595 + (1 - band) * 0.35 - (1 - smoothstep(0.03, 0.1, te)) * 0.4;
+              if (val > 0) {
+                ch[i] = val < 0.05 ? "░" : val < 0.1 ? "▒" : val < 0.16 ? "▓" : "█";
+                const sh = 0.8 + 0.2 * smoothstep(0.0, 0.25, te);
+                fgA[i] = rgb(cR * sh, cG * sh, cB * sh);
               }
             }
           }
 
-          // ---- walls, mountains, trees and bushes: march a ray through the tile grid ----
-          filled.fill(0);
-          nFilled = 0;
+          // ---- ground, trees, bushes: march a ray through the tile grid, sampling the ground as it goes ----
+          filled.set(filled0);
+          nFilled = nInv;
           occTop = rows;
           tStop = 1e9;
+          prevT = 0;
+          prevS = Gp;
           let mapX = Math.floor(px),
             mapY = Math.floor(py);
           const ddx = Math.abs(1 / (rdx || 1e-9)),
@@ -1361,46 +2082,60 @@
             stepY = 1;
             sdy = (mapY + 1 - py) * ddy;
           }
-          let side = 0,
-            t = 0;
-          for (let n = 0; n < 520; n++) {
-            if (n > 0) {
-              // step into the next tile (n = 0 is the tile we are standing in)
-              if (sdx < sdy) {
-                t = sdx;
-                sdx += ddx;
-                mapX += stepX;
-                side = 0;
-              } else {
-                t = sdy;
-                sdy += ddy;
-                mapY += stepY;
-                side = 1;
-              }
-              if (t > MAXD || t > tStop) break;
-            }
-            if (mapX < 0 || mapY < 0 || mapX >= MW || mapY >= MH) {
-              // the edge of the world: a distant ridge
-              const wx = px + rdx * t,
-                wy = py + rdy * t;
-              const hl = Math.sqrt(rdx * rdx + rdy * rdy);
-              const S = 6 + 8 * fbm(wx * 0.06, wy * 0.06, 51, 2);
-              terrainStrip(c, t, wx, wy, S, (rdx / hl) * 1.8, (rdy / hl) * 1.8);
+          let tIn = 0;
+          for (let n = 0; n < 400; n++) {
+            if (mapX < 0 || mapY < 0 || mapX >= MW || mapY >= MH || tIn > TREE_D) break;
+            const tOut = sdx < sdy ? sdx : sdy;
+            const idx = mapY * MW + mapX;
+            if (tile[idx] !== 0) treeTile(c, idx, mapX, mapY, rdx, rdy);
+            const dt = tOut - tIn;
+            let ns = Math.ceil(dt / (0.1 + 0.018 * tIn));
+            if (ns < 1) ns = 1;
+            else if (ns > 10) ns = 10;
+            for (let k = 1; k <= ns; k++) stripAt(tIn + (dt * k) / ns);
+            if (occTop <= 0 || nFilled >= rows || tOut > tStop) {
+              tIn = 1e9;
               break;
             }
-            const idx = mapY * MW + mapX,
-              tp = tile[idx];
-            if (tp === GRASS || tp === WATER || tp === SAND) continue;
-            const tOut = sdx < sdy ? sdx : sdy;
-            if (tp === MOUNT) mountainTile(c, t, tOut, rdx, rdy);
-            else if (tp === STONE) {
-              let u = side === 0 ? py + rdy * t : px + rdx * t;
-              u -= Math.floor(u);
-              stoneStrip(c, t, hgt[idx], side, u, mapX, mapY);
-            } else treeTile(c, idx, mapX, mapY, rdx, rdy); // TREE or BUSH
-            if (nFilled >= rows) break;
+            tIn = tOut;
+            if (sdx < sdy) {
+              sdx += ddx;
+              mapX += stepX;
+            } else {
+              sdy += ddy;
+              mapY += stepY;
+            }
+          }
+          // far away (or beyond the map): only the ground, in bigger and bigger steps
+          if (tIn < MAXD) {
+            let tt = tIn + 0.2;
+            while (tt < MAXD && tt < tStop && occTop > 0 && nFilled < rows) {
+              stripAt(tt);
+              tt += 0.5 + tt * 0.008;
+            }
+          }
+          // from high up the cloud sea runs on past the edge of what is marched: fill what is left of it
+          if (cloudOn && nFilled < rows) {
+            for (let r = 0; r < rows; r++) {
+              if (filled[r] || !rowValid[r]) continue;
+              const s = sRow[r];
+              if (s > -1e-6) continue;
+              const tr = (CLT - EB) / s;
+              if (tr < MAXD * 0.85) continue;
+              const wxr = px + rdx * tr,
+                wyr = py + rdy * tr;
+              const C = cloudFormula(wxr, wyr);
+              if (C < CLT - 7) continue;
+              const hxw = Frow[r] * dirX - lat * dirY,
+                hyw = Frow[r] * dirY + lat * dirX;
+              const i = r * cols + c;
+              filled[r] = 1;
+              zb[i] = tr;
+              paintCloud(i, wxr, wyr, C, tr * gRl, hxw, hyw);
+            }
           }
         }
+        drawNPC(dirX, dirY);
       }
 
       // Copy the character grid into the pixel buffer, then onto the canvas.
@@ -1456,16 +2191,28 @@
         ctx.putImageData(img, 0, 0);
       }
 
+
       /* ---------- 5) HUD & MINIMAP ---------- */
       const info = document.getElementById("info");
       const help = document.getElementById("help");
       const mini = document.getElementById("mini"),
         mctx = mini.getContext("2d");
+      const toastEl = document.getElementById("toast"),
+        chapterEl = document.getElementById("chapter"),
+        dlgEl = document.getElementById("dlg"),
+        dlgName = document.getElementById("dlgName"),
+        dlgText = document.getElementById("dlgText"),
+        dlgHint = document.getElementById("dlgHint"),
+        creditEl = document.getElementById("credit");
       let showFps = false,
         showMini = true,
         showHud = true,
         fps = 0;
       const DIRS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+      let prog = 0, // how far up the mountain (0..1)
+        maxProg = 0,
+        summitT = 0, // seconds spent at the top
+        doneT = 0; // seconds since the talk ended
 
       function updateHud() {
         const deg = ((((angle * 180) / Math.PI + 90) % 360) + 360) % 360;
@@ -1473,7 +2220,6 @@
           hh = Math.floor(hrs),
           mm = Math.floor((hrs - hh) * 60);
         const icon = dayAmt > 0.5 ? "☀" : "☾";
-        const pd = Math.round((pitch * 180) / Math.PI);
         info.textContent =
           "Mountaineer   " +
           icon +
@@ -1486,21 +2232,13 @@
           " " +
           String(Math.round(deg)).padStart(3, "0") +
           "°" +
-          "   look " +
-          (pd > 0 ? "+" : "") +
-          pd +
-          "°" +
+          "   ▲ " +
+          Math.round(Hs(px, py) * 3) +
+          " m   " +
+          Math.round(prog * 100) +
+          "% to the top" +
           (showFps ? "   " + fps + " fps" : "");
       }
-      const MINI_COL = [
-        "#2f6b2f",
-        "#235a9a",
-        "#c9b27a",
-        "#7a746e",
-        "#1b4a1f",
-        "#a39f97",
-        "#2a7a3a",
-      ];
       function drawMini() {
         const R = 20,
           S = 4;
@@ -1512,9 +2250,17 @@
           for (let i = -R; i <= R; i++) {
             const x = ix + i,
               y = iy + j;
+            const h = Hs(x + 0.5, y + 0.5);
             const t = tileAt(x, y);
-            mctx.fillStyle =
-              t === MOUNT && hgt[y * MW + x] > 5.2 ? "#e8eef5" : MINI_COL[t];
+            let col;
+            if (h < WL) col = "#235a9a";
+            else if (sampC(trailD, x + 0.5, y + 0.5) < 2.1) col = "#c9a977";
+            else if (t === TREE) col = "#1b4a1f";
+            else if (t === BUSH) col = "#2a7a3a";
+            else if (t === CAIRN) col = "#d8d4cc";
+            else if (h > 30 && slopeAt(x + 0.5, y + 0.5) > 0.9) col = "#7a746e";
+            else col = h < 1.3 ? "#c9b27a" : h > 0.62 * H_TOP ? "#6f8a4a" : "#2f6b2f";
+            mctx.fillStyle = col;
             mctx.fillRect((i + R) * S, (j + R) * S, S, S);
           }
         const cx = (R + (px - ix)) * S,
@@ -1532,11 +2278,324 @@
         mctx.restore();
       }
 
-      /* ---------- 6) INPUT & MAIN LOOP ---------- */
+      // ----- little messages on the screen -----
+      let toastT = 0,
+        chapT = 0;
+      function toast(msg, sec) {
+        toastEl.textContent = msg;
+        toastEl.style.opacity = 1;
+        toastT = sec || 5;
+      }
+      function chapter(msg, sec) {
+        chapterEl.textContent = msg;
+        chapterEl.style.opacity = 1;
+        chapT = sec || 4;
+      }
+      function tickUi(dt) {
+        if (toastT > 0 && (toastT -= dt) <= 0) toastEl.style.opacity = 0;
+        if (chapT > 0 && (chapT -= dt) <= 0) chapterEl.style.opacity = 0;
+      }
+
+      /* ---------- 6) THE CLIMBER AT THE TOP, AND THE TALK ---------- */
+      const NPC = { x: 0, y: 0, z: 0, a: 0, visible: true, phase: 0, face: 1, walking: false, walkOn: false };
+      {
+        const e = spiralPos(1);
+        NPC.a = Math.atan2(e[1] - CY, e[0] - CX) + 0.45; // waiting just past where the trail arrives
+        NPC.x = CX + SUMMIT_R * Math.cos(NPC.a);
+        NPC.y = CY + SUMMIT_R * Math.sin(NPC.a);
+        NPC.z = Hs(NPC.x, NPC.y);
+      }
+      const NPC_SPEED = 1.25; // tiles per second along the summit path
+
+      function buildScript() {
+        const S = [],
+          ROM = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+        for (const l of DIALOGUE.intro) S.push({ k: "line", l });
+        S.push({ k: "walk", on: true });
+        DIALOGUE.topics.forEach((tp, n) => {
+          S.push({ k: "chapter", text: ROM[n] + " · " + tp.title });
+          for (const l of tp.lines) S.push({ k: "line", l });
+          S.push({ k: "pause", sec: 2.5 });
+        });
+        for (const l of DIALOGUE.outro) S.push({ k: "line", l });
+        S.push({ k: "walk", on: false });
+        S.push({ k: "end" });
+        return S;
+      }
+      const SCRIPT = buildScript();
+      const talk = { state: "wait", i: -1, t: 0, dur: 0, text: "", audio: null, audioDone: true, waiting: false, skip: false, speaking: false };
+      let voiceOn = !!CONFIG.voice;
+
+      function speak(text) {
+        try {
+          if (!voiceOn || !window.speechSynthesis) return;
+          speechSynthesis.cancel();
+          const u = new SpeechSynthesisUtterance(text);
+          u.rate = 0.92;
+          u.pitch = 0.95;
+          speechSynthesis.speak(u);
+        } catch (e) {}
+      }
+      function stopAudio() {
+        if (talk.audio) {
+          try {
+            talk.audio.pause();
+          } catch (e) {}
+          talk.audio = null;
+        }
+        try {
+          if (window.speechSynthesis) speechSynthesis.cancel();
+        } catch (e) {}
+      }
+      function showDlg(on) {
+        dlgEl.style.display = on ? "block" : "none";
+      }
+      function nextItem() {
+        stopAudio();
+        talk.i++;
+        talk.t = 0;
+        talk.skip = false;
+        const it = SCRIPT[talk.i];
+        if (!it) {
+          talk.state = "done";
+          showDlg(false);
+          return;
+        }
+        if (it.k === "line") {
+          const l = it.l;
+          const text = typeof l === "string" ? l : l.text;
+          talk.text = text;
+          talk.dur = Math.max(3.2, 1.6 + text.length * 0.06);
+          talk.audioDone = true;
+          if (typeof l === "object" && l.audio) {
+            try {
+              const a = new Audio(l.audio);
+              talk.audio = a;
+              talk.audioDone = false;
+              a.addEventListener("ended", () => (talk.audioDone = true));
+              a.addEventListener("error", () => (talk.audioDone = true));
+              const p = a.play();
+              if (p && p.catch) p.catch(() => (talk.audioDone = true));
+            } catch (e) {
+              talk.audioDone = true;
+            }
+          } else speak(text);
+          dlgName.textContent = CONFIG.npcName;
+          dlgText.textContent = "";
+          dlgHint.textContent = "Space · next line";
+          showDlg(true);
+        } else if (it.k === "chapter") {
+          showDlg(false);
+          chapter(it.text, 4);
+          talk.dur = 4.2;
+        } else if (it.k === "pause") {
+          showDlg(false);
+          talk.dur = it.sec;
+        } else if (it.k === "walk") {
+          NPC.walkOn = it.on;
+          talk.dur = 0;
+        } else if (it.k === "end") {
+          NPC.walkOn = false;
+          showDlg(false);
+          talk.state = "done";
+          toast("The walk is over. Stay as long as you like.", 8);
+        }
+      }
+      function updateTalk(dt) {
+        const dist = Math.hypot(px - NPC.x, py - NPC.y);
+        const r = Math.hypot(px - CX, py - CY);
+        if (talk.state === "wait") {
+          if (r < R_END + 1 && dist < 12) {
+            talk.state = "run";
+            nextItem();
+          }
+          return;
+        }
+        if (talk.state !== "run") {
+          NPC.walking = false;
+          return;
+        }
+        talk.waiting = NPC.walkOn && (talk.waiting ? dist > 5.5 : dist > 10); // she only waits for you while walking
+        NPC.walking = NPC.walkOn && !talk.waiting;
+        if (talk.waiting) {
+          if (talk.audio) talk.audio.pause();
+          dlgHint.textContent = "… waiting for you to catch up";
+          return;
+        }
+        if (talk.audio && talk.audio.paused && !talk.audioDone) talk.audio.play().catch(() => {});
+        const it = SCRIPT[talk.i];
+        if (!it) return;
+        talk.t += dt;
+        if (it.k === "line") {
+          const n = Math.min(talk.text.length, Math.floor(talk.t * 45));
+          dlgText.textContent = talk.text.slice(0, n);
+          const full = n >= talk.text.length;
+          if (full) dlgHint.textContent = "Space · next line";
+          if (talk.skip) {
+            talk.skip = false;
+            if (!full) talk.t = talk.text.length / 45 + 0.01;
+            else nextItem();
+            return;
+          }
+          if (full && talk.t >= talk.dur && talk.audioDone) nextItem();
+        } else if (it.k === "chapter" || it.k === "pause") {
+          if (talk.t >= talk.dur || talk.skip) nextItem();
+        } else nextItem();
+      }
+      function updateNPC(dt) {
+        if (NPC.walking) {
+          NPC.a += (NPC_SPEED / SUMMIT_R) * dt;
+          NPC.phase += dt * 6.5;
+          const nx = CX + SUMMIT_R * Math.cos(NPC.a),
+            ny = CY + SUMMIT_R * Math.sin(NPC.a);
+          const vx = -Math.sin(NPC.a),
+            vy = Math.cos(NPC.a);
+          NPC.x = nx;
+          NPC.y = ny;
+          const rx = -Math.sin(angle),
+            ry = Math.cos(angle);
+          NPC.face = vx * rx + vy * ry > 0 ? -1 : 1; // backpack on the side she is walking away from
+        } else NPC.phase *= 0.9;
+        NPC.z = Hs(NPC.x, NPC.y);
+      }
+
+      /* ---------- 7) MUSIC ---------- */
+      // Plays whatever link is in <link id="music" href="..."> at the top of this file, quietly, on repeat.
+      // If there is no link, or it cannot be loaded, a soft ambient piece is made on the fly instead.
+      const music = { el: null, ctx: null, master: null, mode: "", started: false, on: true, timer: 0 };
+      function setCredit(text) {
+        if (!text) return;
+        creditEl.textContent = text;
+        creditEl.style.opacity = 0.75;
+        setTimeout(() => (creditEl.style.opacity = 0), 9000);
+      }
+      function startMusic() {
+        if (music.started) return;
+        music.started = true;
+        const link = document.getElementById("music");
+        const href = link && link.getAttribute("href");
+        if (!href) return startProcedural();
+        try {
+          const a = new Audio();
+          a.loop = true;
+          a.volume = 0;
+          a.preload = "auto";
+          a.src = href;
+          music.el = a;
+          music.mode = "file";
+          a.addEventListener("error", () => {
+            if (music.mode === "file") startProcedural();
+          });
+          const p = a.play();
+          if (p && p.catch) p.catch(() => startProcedural());
+          a.addEventListener("playing", () => setCredit(link.getAttribute("data-credit")));
+          let v = 0;
+          const iv = setInterval(() => {
+            v = Math.min(0.5, v + 0.02);
+            a.volume = music.on ? v : 0;
+            if (v >= 0.5) clearInterval(iv);
+          }, 200);
+          setTimeout(() => {
+            if (music.mode === "file" && a.paused) startProcedural();
+          }, 9000);
+        } catch (e) {
+          startProcedural();
+        }
+      }
+      function startProcedural() {
+        if (music.mode === "synth") return;
+        if (music.el) {
+          try {
+            music.el.pause();
+          } catch (e) {}
+          music.el = null;
+        }
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        music.mode = "synth";
+        const ac = new AC();
+        music.ctx = ac;
+        if (ac.resume) ac.resume();
+        const master = ac.createGain();
+        master.gain.value = 0;
+        master.connect(ac.destination);
+        master.gain.linearRampToValueAtTime(music.on ? 0.5 : 0, ac.currentTime + 6);
+        music.master = master;
+        // a soft echo that works like a reverb
+        const dly = ac.createDelay(1.5);
+        dly.delayTime.value = 0.43;
+        const fb = ac.createGain();
+        fb.gain.value = 0.5;
+        const lp = ac.createBiquadFilter();
+        lp.type = "lowpass";
+        lp.frequency.value = 1500;
+        dly.connect(lp);
+        lp.connect(fb);
+        fb.connect(dly);
+        const wet = ac.createGain();
+        wet.gain.value = 0.55;
+        lp.connect(wet);
+        wet.connect(master);
+        const bus = ac.createGain();
+        bus.connect(master);
+        bus.connect(dly);
+        const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+        function note(m, t0, dur, type, vol, att) {
+          const o = ac.createOscillator(),
+            g = ac.createGain();
+          o.type = type;
+          o.frequency.value = hz(m);
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.linearRampToValueAtTime(vol, t0 + att);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+          o.connect(g);
+          g.connect(bus);
+          o.start(t0);
+          o.stop(t0 + dur + 0.1);
+        }
+        const CH = [
+          [45, 52, 59, 60, 64], // Am9
+          [41, 48, 52, 57, 60], // Fmaj7
+          [48, 55, 60, 64, 67], // C
+          [43, 50, 59, 62, 64], // G6
+        ];
+        const PENT = [69, 72, 74, 76, 79, 81, 76, 72];
+        let when = ac.currentTime + 0.3,
+          bar = 0;
+        const BAR = 8;
+        function schedule() {
+          while (when < ac.currentTime + 12) {
+            const ch0 = CH[bar % CH.length];
+            ch0.forEach((m, k) => {
+              note(m, when + k * 0.12, BAR + 1.5, k < 2 ? "triangle" : "sine", k < 2 ? 0.07 : 0.045, 2.2);
+            });
+            let tm = when + 0.8 + Math.random() * 1.2;
+            while (tm < when + BAR - 1) {
+              const m = PENT[(Math.random() * PENT.length) | 0];
+              note(m, tm, 4.5, "sine", 0.05, 0.03);
+              tm += 1.6 + Math.random() * 2.8;
+            }
+            when += BAR;
+            bar++;
+          }
+        }
+        schedule();
+        music.timer = setInterval(schedule, 2000);
+        setCredit("Music: soft ambient piece generated in your browser");
+      }
+      function toggleMusic() {
+        music.on = !music.on;
+        if (music.el) music.el.volume = music.on ? 0.5 : 0;
+        if (music.master) music.master.gain.value = music.on ? 0.5 : 0;
+        toast(music.on ? "Music on" : "Music off", 2);
+      }
+
+      /* ---------- 8) INPUT & MAIN LOOP ---------- */
       const keys = {};
       let paused = true,
         started = false,
-        dragging = false;
+        dragging = false,
+        auto = false;
       const overlay = document.getElementById("overlay");
 
       function setPaused(p) {
@@ -1546,12 +2605,7 @@
 
       window.addEventListener("keydown", (e) => {
         keys[e.code] = true;
-        if (
-          ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(
-            e.code,
-          )
-        )
-          e.preventDefault();
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
         if (e.repeat) return;
         if (e.code === "KeyM") {
           showMini = !showMini;
@@ -1562,6 +2616,18 @@
           info.style.display = help.style.display = showHud ? "block" : "none";
         }
         if (e.code === "KeyF") showFps = !showFps;
+        if (e.code === "KeyN") toggleMusic();
+        if (e.code === "KeyV") {
+          voiceOn = !voiceOn;
+          if (!voiceOn) stopAudio();
+          toast(voiceOn ? "Spoken voice on" : "Spoken voice off", 2);
+        }
+        if (e.code === "KeyZ") {
+          auto = !auto;
+          toast(auto ? "Auto-walk on (press Z or move to stop)" : "Auto-walk off", 2.5);
+        }
+        if (e.code === "Space") talk.skip = true;
+        if (["KeyW", "KeyA", "KeyS", "KeyD"].includes(e.code) && auto) auto = false;
         if (e.code === "BracketLeft" && qIdx > 0) {
           qIdx--; // less detail (faster)
           resize();
@@ -1581,12 +2647,18 @@
       });
 
       function startGame() {
+        const first = !started;
         started = true;
         setPaused(false);
         try {
           const p = cv.requestPointerLock && cv.requestPointerLock();
           if (p && p.catch) p.catch(() => {});
         } catch (e) {}
+        startMusic();
+        if (first) {
+          chapter("The Walk Up", 5);
+          toast("Follow the trail. Z walks for you.", 7);
+        }
       }
       overlay.addEventListener("click", startGame);
       cv.addEventListener("mousedown", () => {
@@ -1611,35 +2683,64 @@
         }
       });
 
+      const MILESTONES = [
+        [0.12, "The path begins to climb."],
+        [0.45, "The air is getting cooler. Clouds ahead."],
+        [0.73, "Above the clouds."],
+        [0.88, "Not far now."],
+        [0.97, "The top."],
+      ];
+      let mileIdx = 0;
+
       function update(dt) {
+        const r = Math.hypot(px - CX, py - CY);
+        const atTop = r < R_END + 0.5;
         // turning
-        const turn =
-          (keys.ArrowRight || keys.KeyE ? 1 : 0) -
-          (keys.ArrowLeft || keys.KeyQ ? 1 : 0);
+        const turn = (keys.ArrowRight || keys.KeyE ? 1 : 0) - (keys.ArrowLeft || keys.KeyQ ? 1 : 0);
         angle += turn * 2.1 * dt;
-        const pit =
-          (keys.PageUp || keys.KeyR || keys.ArrowUp ? 1 : 0) -
-          (keys.PageDown || keys.KeyV || keys.ArrowDown ? 1 : 0);
+        const pit = (keys.PageUp || keys.KeyR || keys.ArrowUp ? 1 : 0) - (keys.PageDown || keys.ArrowDown ? 1 : 0);
         pitch = clamp(pitch + pit * 1.4 * dt, -PITCH_MAX, PITCH_MAX);
         // walking
-        const fwd = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
+        let fwd = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
         const str = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+        if (auto) {
+          if (atTop) auto = false;
+          else {
+            // follow the trail: look a little way ahead along the spiral and steer towards it
+            const ai = Math.min(TN, trailIdx + 12);
+            const want = Math.atan2(trailPts[ai * 2 + 1] - py, trailPts[ai * 2] - px);
+            const d = angDiff(want, angle);
+            angle += clamp(d, -2.4 * dt, 2.4 * dt);
+            fwd = 1;
+          }
+        }
         let vx = Math.cos(angle) * fwd - Math.sin(angle) * str;
         let vy = Math.sin(angle) * fwd + Math.cos(angle) * str;
         const len = Math.hypot(vx, vy);
         moving = len > 0 ? 1 : 0;
         if (len > 0) {
-          const speed =
-            ((keys.ShiftLeft || keys.ShiftRight ? 6 : 3.3) * dt) / len;
+          const inBush = tileAt(Math.floor(px), Math.floor(py)) === BUSH ? 0.72 : 1; // pushing through a bush slows you
+          const speed = ((keys.ShiftLeft || keys.ShiftRight ? 6 : 3.3) * dt * inBush) / len;
           const nx = px + vx * speed,
             ny = py + vy * speed;
-          if (!blocked(nx, py)) px = nx; // try X and Y separately so you slide along walls
-          if (!blocked(px, ny)) py = ny;
+          // try the whole step, then each axis on its own, so you slide along obstacles and steep ground
+          if (!tryMove(nx, ny)) {
+            if (!tryMove(nx, py)) tryMove(px, ny);
+          }
+          trackTrail();
           bobT += dt * (keys.ShiftLeft || keys.ShiftRight ? 12 : 8);
         }
         bob = lerp(bob, moving ? Math.sin(bobT) * 0.006 * K : 0, 0.2);
-        // time
-        timeOfDay = (timeOfDay + (dt / DAY_SECONDS) * (keys.KeyT ? 40 : 1)) % 1;
+        EB += (Hs(px, py) + EYE - EB) * Math.min(1, dt * 10);
+        // how far up are we? the day moves on as you climb: morning at the bottom, golden evening at the top
+        prog = clamp((R_START - r) / (R_START - R_END), 0, 1);
+        if (prog > maxProg) maxProg = prog;
+        if (atTop || maxProg > 0.985) summitT += dt;
+        // day and night: one whole day (sunrise, noon, sunset, night) lasts DAY_SECONDS. hold T to fast-forward
+        timeOfDay = (timeOfDay + (dt / DAY_SECONDS) * (keys.KeyT ? 12 : 1)) % 1;
+        while (mileIdx < MILESTONES.length && maxProg >= MILESTONES[mileIdx][0]) toast(MILESTONES[mileIdx++][1], 5);
+        updateNPC(dt);
+        updateTalk(dt);
       }
 
       let lastT = performance.now(),
@@ -1653,6 +2754,7 @@
         if (!paused) {
           update(dt);
           worldTime += dt;
+          tickUi(dt);
         }
         render();
         present();
@@ -1671,9 +2773,12 @@
         }
         requestAnimationFrame(loop);
       }
+      timeOfDay = 0.29;
+      EB = Hs(px, py) + EYE;
       window.addEventListener("resize", resize);
       resize();
       requestAnimationFrame(loop);
+
     </script>
   </body>
 </html>
